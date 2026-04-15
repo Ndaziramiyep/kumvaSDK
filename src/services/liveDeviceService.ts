@@ -30,11 +30,18 @@ export const setLiveSensorState = (
   const existing = liveStates.get(key);
   const merged: LiveSensorState = {
     mac: key,
-    temperature: partial.temperature ?? existing?.temperature,
-    humidity: partial.humidity ?? existing?.humidity,
-    battery: partial.battery ?? existing?.battery,
+    temperature: typeof partial.temperature === 'number' ? partial.temperature : existing?.temperature,
+    humidity:    typeof partial.humidity    === 'number' ? partial.humidity    : existing?.humidity,
+    battery:     typeof partial.battery     === 'number' ? partial.battery     : existing?.battery,
     updatedAt: Date.now(),
   };
+
+  // Only update updatedAt if we actually have sensor data
+  if (merged.temperature === undefined && merged.humidity === undefined) {
+    if (existing) return; // don't overwrite a good state with an empty one
+    merged.updatedAt = 0;
+  }
+
   liveStates.set(key, merged);
   listeners.forEach(cb => cb());
 };

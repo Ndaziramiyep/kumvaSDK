@@ -150,7 +150,6 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
 
       await insertDevice(device);
       addDevice(device);
-      await new Promise(r => setTimeout(r, 50));
       navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
     } catch (e: any) {
       if (e?.message === 'DUPLICATE_MAC') {

@@ -10,7 +10,7 @@ import { getReadingsByDevice, insertReadings } from '../../database/repositories
 import { getIncidentsByDevice } from '../../database/repositories/incidentRepository';
 import { updateDeviceSync } from '../../database/repositories/deviceRepository';
 import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect } from '../../services/bluetoothService';
-import { addReading } from '../../services/cacheService';
+import { exportPdf } from '../../services/exportService';
 import { useLiveDeviceState } from '../../hooks/useLiveDevice';
 import { Reading } from '../../types/reading';
 
@@ -241,73 +241,88 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
     : null;
 
   const handleSync = async () => {
+    if (syncing) return;
     setSyncing(true);
     let batteryFromBle: number | undefined = device.battery_level ?? undefined;
     let connectionSubscription: any;
     let historySubscription: any;
+    let connTimer: any;
+    let histTimer: any;
 
-    const promiseWithTimeout = <T,>(promise: Promise<T>, ms: number, errorMessage: string) =>
-      new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(errorMessage)), ms);
-        promise.then(value => { clearTimeout(timer); resolve(value); }).catch(err => { clearTimeout(timer); reject(err); });
-      });
+    const cleanup = () => {
+      clearTimeout(connTimer);
+      clearTimeout(histTimer);
+      connectionSubscription?.remove?.();
+      historySubscription?.remove?.();
+    };
 
     try {
-      const connectionReady = new Promise<void>((resolve, reject) => {
+      // Step 1: connect and wait for connected_complete
+      await new Promise<void>((resolve, reject) => {
+        connTimer = setTimeout(() => reject(new Error('Connection timed out')), 25000);
         connectionSubscription = onConnState((event: any) => {
-          if (!event || event.mac !== device.mac_address) return;
+          const mac = (event?.mac ?? '').toUpperCase();
+          const devMac = device.mac_address.toUpperCase();
+          if (mac !== devMac) return;
           if (typeof event.battery === 'number') batteryFromBle = event.battery;
           if (event.state === 'connected_complete') {
+            clearTimeout(connTimer);
             resolve();
           } else if (event.state === 'password_error') {
+            clearTimeout(connTimer);
             reject(new Error('Password verification failed'));
-          } else if (event.state === 'disconnected') {
-            reject(new Error('Disconnected before sync completed'));
           }
         });
+        connect(device.mac_address);
       });
 
-      const historyReady = new Promise<void>((resolve, reject) => {
-        historySubscription = onThHistoryData(async (event: any) => {
+      // Step 2: request history and wait for the callback
+      const historyItems = await new Promise<any[]>((resolve, reject) => {
+        histTimer = setTimeout(() => resolve([]), 30000); // resolve empty on timeout — don't fail
+        historySubscription = onThHistoryData((event: any) => {
+          clearTimeout(histTimer);
           const payload = Array.isArray(event) ? { history: event } : event;
-          const items = Array.isArray(payload.history) ? payload.history : [];
-          const readingsToInsert: Omit<Reading, 'reading_id'>[] = items.map((item: any) => ({
-            device_id: device.device_id,
-            temperature: Number(item.temperature) || 0,
-            humidity: item.humidity != null ? Number(item.humidity) : null,
-            timestamp: Number(item.timestamp) || Date.now(),
-          }));
-
-          if (readingsToInsert.length > 0) {
-            try {
-              await insertReadings(readingsToInsert);
-              readingsToInsert.forEach(r => addReading(r));
-            } catch (insertError) {
-              console.error('History persistence failed', insertError);
-            }
-          }
-
-          resolve();
+          resolve(Array.isArray(payload.history) ? payload.history : []);
         });
+        readThHistoryData(device.mac_address);
       });
 
-      connect(device.mac_address);
-      await promiseWithTimeout(connectionReady, 20000, 'Connection timed out');
-      readThHistoryData(device.mac_address);
-      await promiseWithTimeout(historyReady, 20000, 'History read timed out');
+      // Step 3: parse timestamps and persist
+      const parseTimestamp = (ts: any): number => {
+        if (typeof ts === 'number' && ts > 1000000000) return ts * (ts < 1e12 ? 1000 : 1);
+        if (typeof ts === 'string') {
+          const parsed = Date.parse(ts.replace(' ', 'T'));
+          if (!isNaN(parsed)) return parsed;
+        }
+        return Date.now();
+      };
 
-      const now = Date.now();
-      await updateDeviceSync(device.device_id, now, batteryFromBle);
-      updateDeviceStore({ ...device, battery_level: batteryFromBle, last_sync: now });
+      const readingsToInsert: Omit<Reading, 'reading_id'>[] = historyItems
+        .filter((item: any) => item != null && item.temperature != null)
+        .map((item: any) => ({
+          device_id: device.device_id,
+          temperature: Number(item.temperature),
+          humidity: item.humidity != null ? Number(item.humidity) : null,
+          timestamp: parseTimestamp(item.timestamp),
+        }));
+
+      if (readingsToInsert.length > 0) {
+        await insertReadings(readingsToInsert);
+      }
+
+      const syncTime = Date.now();
+      await updateDeviceSync(device.device_id, syncTime, batteryFromBle);
+      updateDeviceStore({ ...device, battery_level: batteryFromBle ?? device.battery_level, last_sync: syncTime });
 
       const fresh = await getReadingsByDevice(deviceId, 500);
       setReadings(fresh);
-      Alert.alert('Sync Complete', 'Device data has been refreshed.');
+      Alert.alert('Sync Complete', readingsToInsert.length > 0
+        ? `Saved ${readingsToInsert.length} readings.`
+        : 'No new history data from device.');
     } catch (error: any) {
       Alert.alert('Sync Failed', error?.message || 'Could not sync device data.');
     } finally {
-      connectionSubscription?.remove?.();
-      historySubscription?.remove?.();
+      cleanup();
       disConnect(device.mac_address);
       setSyncing(false);
     }
@@ -403,7 +418,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
             })}
           </View>
           {/* Export button */}
-          <TouchableOpacity style={styles.exportBtn} onPress={() => exportService.exportTemperatureReport(device.device_id)}>
+          <TouchableOpacity style={styles.exportBtn} onPress={() => exportPdf(device.device_id, 'last-7-days').catch(console.error)}>
             <Ionicons name="download-outline" size={16} color="#5C6BC0" />
             <Text style={styles.exportBtnText}>Export PDF/Excel</Text>
           </TouchableOpacity>
@@ -446,7 +461,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
             })}
           </View>
           {/* Export button */}
-          <TouchableOpacity style={styles.exportBtn} onPress={() => exportService.exportHumidityReport(device.device_id)}>
+          <TouchableOpacity style={styles.exportBtn} onPress={() => exportPdf(device.device_id, 'last-7-days').catch(console.error)}>
             <Ionicons name="download-outline" size={16} color="#06B6D4" />
             <Text style={styles.exportBtnText}>Export PDF/Excel</Text>
           </TouchableOpacity>

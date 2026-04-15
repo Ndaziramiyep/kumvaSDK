@@ -38,6 +38,16 @@ export default function App() {
   useEffect(() => {
     let active = true;
     let scanSubscription: any;
+    let restartTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function startBleScan() {
+      if (!active) return;
+      startScan();
+      // Kotlin scan runs for 5 min then stops — restart it automatically
+      restartTimer = setTimeout(() => {
+        if (active) startBleScan();
+      }, 5 * 60 * 1000);
+    }
 
     async function initBleScan() {
       try {
@@ -48,10 +58,9 @@ export default function App() {
         }
         if (!active) return;
 
-        startScan();
         scanSubscription = onScanResult((devices: any[]) => {
           devices?.forEach(device => {
-            if (!device?.mac || device.type !== 3) return;
+            if (!device?.mac) return;
             setLiveSensorState(device.mac, {
               temperature: device.temperature,
               humidity: device.humidity,
@@ -59,6 +68,8 @@ export default function App() {
             });
           });
         });
+
+        startBleScan();
       } catch (e) {
         console.error('BLE scan init failed', e);
       }
@@ -68,6 +79,7 @@ export default function App() {
 
     return () => {
       active = false;
+      if (restartTimer) clearTimeout(restartTimer);
       scanSubscription?.remove?.();
       stopScan();
     };

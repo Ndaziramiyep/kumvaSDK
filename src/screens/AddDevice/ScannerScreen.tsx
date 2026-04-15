@@ -4,9 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { startScan, stopScan, onScanResult } from '../../services/bluetoothService';
-import { setLiveSensorState } from '../../services/liveDeviceService';
-import { checkAllStatus, requestPermissions } from '../../utils/permissions';
+import { onScanResult } from '../../services/bluetoothService';
 import { CameraView, Camera } from 'expo-camera';
 
 interface BleAdvertisement {
@@ -33,94 +31,42 @@ export default function ScannerScreen({ navigation }: any) {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
   const scanLock = useRef(false);
-  const scanActive = useRef(false);
   const scanSubscription = useRef<any>(null);
-  const scanTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     let active = true;
 
-    async function startBleScan() {
-      const status = await checkAllStatus();
-      if (!active) return;
-      if (status !== 'granted') {
-        const requested = await requestPermissions();
-        if (!active) return;
-        if (requested !== 'granted') {
-          setHasPermission(false);
-          return;
-        }
-      }
-
-      setHasPermission(true);
-      try {
-        startScan();
-        scanActive.current = true;
-
-        scanSubscription.current = onScanResult((devices: any[]) => {
-          if (!active || scanLock.current) return;
-          if (!devices?.length) return;
-
-          devices.forEach((device: any) => {
-            if (!device?.mac || device.type !== 3) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
-            });
-          });
-
-          const found = devices.find(device => device.mac && device.type === 3 && device.temperature != null);
-          if (!found) return;
-
-          scanLock.current = true;
-          setScanned(true);
-          stopScan();
-          scanActive.current = false;
-          if (scanTimeout.current) {
-            clearTimeout(scanTimeout.current);
-            scanTimeout.current = null;
-          }
-
-          navigation.navigate('DeviceConfig', {
-            scannedDevice: {
-              name: found.name ?? 'Minew Sensor',
-              macAddress: found.mac,
-              category: 'freezer',
-            },
-          });
-        });
-
-        scanTimeout.current = setTimeout(() => {
-          if (scanActive.current) {
-            stopScan();
-            scanActive.current = false;
-          }
-        }, 90000);
-      } catch {
-        // ignore scan startup failures; camera fallback still works
-      }
-    }
-
-    startBleScan();
-
+    // Only request camera permission and listen to the existing scan
+    // App.tsx owns the BLE scan lifecycle — we just subscribe here
     Camera.requestCameraPermissionsAsync().then(({ status }) => {
       if (!active) return;
       setHasPermission(status === 'granted');
     });
 
+    scanSubscription.current = onScanResult((devices: any[]) => {
+      if (!active || scanLock.current) return;
+      if (!devices?.length) return;
+
+      const found = devices.find(d => d.mac && d.temperature != null);
+      if (!found) return;
+
+      scanLock.current = true;
+      setScanned(true);
+
+      navigation.navigate('DeviceConfig', {
+        scannedDevice: {
+          name: found.name ?? 'Minew Sensor',
+          macAddress: found.mac,
+          category: 'freezer',
+        },
+      });
+    });
+
     return () => {
       active = false;
-      if (scanActive.current) {
-        stopScan();
-        scanActive.current = false;
-      }
       if (scanSubscription.current?.remove) {
         scanSubscription.current.remove();
-      }
-      if (scanTimeout.current) {
-        clearTimeout(scanTimeout.current);
-        scanTimeout.current = null;
+        scanSubscription.current = null;
       }
     };
   }, [navigation]);
@@ -129,14 +75,6 @@ export default function ScannerScreen({ navigation }: any) {
     if (scanLock.current) return;
     scanLock.current = true;
     setScanned(true);
-    if (scanActive.current) {
-      stopScan();
-      scanActive.current = false;
-    }
-    if (scanTimeout.current) {
-      clearTimeout(scanTimeout.current);
-      scanTimeout.current = null;
-    }
 
     const parsed = parseDevicePayload(data);
     if (parsed && parsed.macAddress) {

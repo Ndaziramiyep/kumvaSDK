@@ -67,14 +67,7 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun isTemperatureHumiditySensor(sensor: IndustrialHtSensor, frame: IndustrialHtFrame?): Boolean {
-        val type = getSensorType(sensor)
-        if (type == 3) return true
-        if (sensor.name?.contains("MST01", ignoreCase = true) == true) return true
-        return frame != null
-    }
-
-    private val mConnStateListener = OnConnStateListener { mac, state ->
+private val mConnStateListener = OnConnStateListener { mac, state ->
         if (state.name == "VerifyPassword") {
             sendPasswordMethod?.let {
                 try { it.invoke(mBleManager, mac, pendingSecretKey) }
@@ -114,7 +107,6 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     fun startScan() {
         if (scanning) return
         scanning = true
-        synchronized(discoveredDevices) { discoveredDevices.clear() }
         mBleManager.startScan(reactContext, 5 * 60 * 1000, object : OnScanSensorResultListener {
             override fun onScanResult(list: MutableList<IndustrialHtSensor>) { processScanResults(list) }
             override fun onStopScan(list: MutableList<IndustrialHtSensor>) { scanning = false }
@@ -126,16 +118,25 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
             for (sensor in list) {
                 val mac = sensor.macAddress ?: continue
                 val industrialHtFrame = sensor.getMinewFrame(HtFrameType.INDUSTRIAL_HT_FRAME) as? IndustrialHtFrame
-                if (!isTemperatureHumiditySensor(sensor, industrialHtFrame)) continue
-                val sensorType = getSensorType(sensor)
                 val staticInfoFrame = sensor.getMinewFrame(HtFrameType.DEVICE_STATIC_INFO_FRAME) as? DeviceStaticInfoFrame
+                val sensorType = getSensorType(sensor)
+
+                // Try to resolve temp/hum first — accept the device if we get data
+                val (temp, hum) = resolveTemperatureHumidity(sensor, industrialHtFrame)
+
+                // Accept if: known TH type, MST01 name, has a frame, or we actually got temp data
+                val isTH = sensorType == 3
+                    || sensor.name?.contains("MST01", ignoreCase = true) == true
+                    || industrialHtFrame != null
+                    || temp != null
+                if (!isTH) continue
+
                 val data = discoveredDevices.getOrPut(mac) { DeviceData(mac, sensor.name ?: "Unknown", sensorType) }
                 data.type = sensorType
                 data.sensorInstance = sensor
                 data.rssi = sensor.rssi
                 data.lastSeen = System.currentTimeMillis()
                 staticInfoFrame?.battery?.let { data.battery = it }
-                val (temp, hum) = resolveTemperatureHumidity(sensor, industrialHtFrame)
                 temp?.let { data.temperature = it }
                 hum?.let { data.humidity = it }
             }
@@ -180,19 +181,20 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
         val list = Arguments.createArray()
         synchronized(discoveredDevices) {
             for (d in discoveredDevices.values) {
+                // Only emit devices that have at least temperature data
+                if (d.temperature == null) continue
                 list.pushMap(Arguments.createMap().apply {
                     putString("mac", d.mac)
-                    putString("identifier", d.mac)
                     putString("name", d.name)
                     d.type?.let { putInt("type", it) }
-                    d.temperature?.let { putDouble("temperature", it) }
+                    putDouble("temperature", d.temperature!!)
                     d.humidity?.let { putDouble("humidity", it) }
                     d.battery?.let { putInt("battery", it) }
                     putInt("rssi", d.rssi)
                 })
             }
         }
-        emit("onDevicesUpdated", list)
+        if (list.size() > 0) emit("onDevicesUpdated", list)
     }
 
     @ReactMethod
@@ -237,9 +239,25 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
                         try {
                             val tVal = (data.javaClass.getMethod("getTemperature").invoke(data) as? Number)?.toDouble() ?: 0.0
                             val hVal = (data.javaClass.getMethod("getHumidity").invoke(data) as? Number)?.toDouble() ?: 0.0
-                            val timeStr = data.javaClass.getMethod("getTime").invoke(data)?.toString() ?: ""
+                            val timeRaw = data.javaClass.getMethod("getTime").invoke(data)
+                            // getTime() may return seconds-since-epoch (Long) or a formatted string
+                            val tsMs: Long = when (timeRaw) {
+                                is Number -> {
+                                    val v = timeRaw.toLong()
+                                    if (v < 1_000_000_000_000L) v * 1000L else v
+                                }
+                                is String -> {
+                                    try {
+                                        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+                                        sdf.parse(timeRaw)?.time ?: System.currentTimeMillis()
+                                    } catch (e: Exception) { System.currentTimeMillis() }
+                                }
+                                else -> System.currentTimeMillis()
+                            }
                             array.pushMap(Arguments.createMap().apply {
-                                putDouble("temperature", tVal); putDouble("humidity", hVal); putString("timestamp", timeStr)
+                                putDouble("temperature", tVal)
+                                putDouble("humidity", hVal)
+                                putDouble("timestamp", tsMs.toDouble())
                             })
                         } catch (e: Exception) { Log.e(TAG, "History parse error", e) }
                     }
@@ -258,7 +276,13 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
                     mBleManager.javaClass.getMethod("readHtHistoryData", String::class.java, Long::class.java, Long::class.java, Long::class.java, listenerClass)
                         .invoke(mBleManager, mac, systemTime - 604800, systemTime, systemTime, proxy)
                 }
-            } catch (e: Exception) { Log.e(TAG, "readHistoryData failed", e) }
+            } catch (e: Exception) {
+                Log.e(TAG, "readHistoryData failed", e)
+                // Emit empty history so JS promise resolves instead of timing out
+                emit("onHistoryDataReceived", Arguments.createMap().apply {
+                    putString("mac", mac); putArray("history", Arguments.createArray())
+                })
+            }
         }
     }
 

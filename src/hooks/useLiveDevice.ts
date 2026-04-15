@@ -21,7 +21,10 @@ export function useLiveDeviceStates() {
   const [states, setStates] = useState(() => getAllLiveSensorStates());
 
   useEffect(() => {
-    const subscription = subscribeLiveSensorStates(setStates);
+    // Subscribe and force a new Map reference on every update so React re-renders
+    const subscription = subscribeLiveSensorStates(newStates => {
+      setStates(new Map(newStates));
+    });
     return () => subscription.remove();
   }, []);
 
