@@ -5,7 +5,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { startScan, stopScan, onScanResult } from '../../services/bluetoothService';
-import { setLiveSensorState } from '../../services/liveDeviceService';
 import { checkAllStatus, requestPermissions } from '../../utils/permissions';
 import { CameraView, Camera } from 'expo-camera';
 
@@ -15,18 +14,57 @@ interface BleAdvertisement {
   category?: string;
 }
 
-const MAC_PATTERN = /^[0-9A-Fa-f]{12}$|^[0-9A-Fa-f:]{11,17}$/;
-
 function parseDevicePayload(data: string): BleAdvertisement | null {
+  try {
+    const parsed = JSON.parse(data);
+    if (parsed && typeof parsed.macAddress === 'string') {
+      return {
+        name: typeof parsed.name === 'string' ? parsed.name : '',
+        macAddress: parsed.macAddress,
+        category: typeof parsed.category === 'string' ? parsed.category : undefined,
+      };
+    }
+  } catch {
+    // fall through to text parsing
+  }
+
   const trimmed = data.trim();
-  if (MAC_PATTERN.test(trimmed)) {
+  const macPattern = /^[0-9A-Fa-f]{12}$|^[0-9A-Fa-f:]{11,17}$/;
+  if (macPattern.test(trimmed)) {
     return { name: '', macAddress: trimmed };
   }
-  return null;
-}
 
-function normalizeMac(mac: string): string {
-  return mac.trim().toUpperCase();
+  const parts = trimmed.split(';').map(p => p.trim()).filter(Boolean);
+  if (parts.length === 2) {
+    const [first, second] = parts;
+    let macAddress: string | undefined;
+    let name: string | undefined;
+
+    if (/^[0-9A-Fa-f:]{11,17}$/.test(first)) {
+      macAddress = first;
+      name = second;
+    }
+
+    const parseKeyValue = (value: string) => {
+      const [key, ...rest] = value.split(/[:=]/);
+      return { key: key.trim().toLowerCase(), value: rest.join(':').trim() };
+    };
+
+    if (!name || !macAddress) {
+      const firstKV = parseKeyValue(first);
+      const secondKV = parseKeyValue(second);
+      if (firstKV.key === 'mac' || firstKV.key === 'macaddress') macAddress = firstKV.value;
+      if (firstKV.key === 'name') name = firstKV.value;
+      if (secondKV.key === 'mac' || secondKV.key === 'macaddress') macAddress = secondKV.value;
+      if (secondKV.key === 'name') name = secondKV.value;
+    }
+
+    if (macAddress) {
+      return { name: name ?? '', macAddress };
+    }
+  }
+
+  return null;
 }
 
 export default function ScannerScreen({ navigation }: any) {
@@ -61,16 +99,7 @@ export default function ScannerScreen({ navigation }: any) {
           if (!active || scanLock.current) return;
           if (!devices?.length) return;
 
-          devices.forEach((device: any) => {
-            if (!device?.mac || device.type !== 3) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
-            });
-          });
-
-          const found = devices.find(device => device.mac && device.type === 3 && device.temperature != null);
+          const found = devices.find(device => device.mac && device.temperature != null);
           if (!found) return;
 
           scanLock.current = true;
@@ -139,20 +168,14 @@ export default function ScannerScreen({ navigation }: any) {
     }
 
     const parsed = parseDevicePayload(data);
-    if (parsed && parsed.macAddress) {
-      navigation.navigate('DeviceConfig', {
-        scannedDevice: {
-          name: '',
-          macAddress: normalizeMac(parsed.macAddress),
-          category: 'freezer',
-        },
-      });
+    if (parsed && parsed.macAddress && parsed.name) {
+      navigation.navigate('DeviceConfig', { scannedDevice: parsed });
       return;
     }
 
     Alert.alert(
       'Invalid QR Code',
-      'Expected format: a Minew device MAC address like AA:BB:CC:DD:EE:FF',
+      'Expected format:\n{"name":"Sensor-01","macAddress":"AA:BB:CC:DD:EE:FF"}\nor\nAA:BB:CC:DD:EE:FF;Sensor-01',
       [{
         text: 'Try Again',
         onPress: () => { setScanned(false); scanLock.current = false; },
@@ -216,6 +239,7 @@ export default function ScannerScreen({ navigation }: any) {
           <Text style={styles.permissionNote}>Camera permission denied. Enable it in Settings.</Text>
         )}
 
+        {/* Register manually button */}
         <TouchableOpacity
           style={styles.manualBtn}
           onPress={() => navigation.navigate('DeviceConfig', { scannedDevice: null })}
@@ -302,6 +326,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 20, fontWeight: '800', color: '#1C1C1E', textAlign: 'center' },
   subtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 22 },
   permissionNote: { fontSize: 12, color: '#EF4444', textAlign: 'center' },
+
   manualBtn: {
     backgroundColor: '#5C6BC0',
     borderRadius: 14,

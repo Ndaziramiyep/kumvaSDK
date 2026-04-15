@@ -188,12 +188,11 @@ function CategoryGraph({
 
 // ── Device grid card ──────────────────────────────────────────────────────────
 function DeviceCard({
-  device, lastTemp, lastHumidity, liveBattery, isActive, onPress,
+  device, lastTemp, lastHumidity, isActive, onPress,
 }: {
   device: Device;
   lastTemp: number | null;
   lastHumidity: number | null;
-  liveBattery?: number | null;
   isActive: boolean;
   onPress: () => void;
 }) {
@@ -253,7 +252,7 @@ function DeviceCard({
         <View style={dc.batteryRow}>
           <Ionicons name="battery-half-outline" size={12} color="#9CA3AF" />
           <Text style={dc.battery}>
-            {liveBattery != null ? `${liveBattery}%` : device.battery_level != null ? `${device.battery_level}%` : '--'}
+            {device.battery_level != null ? `${device.battery_level}%` : '--'}
           </Text>
         </View>
       </Animated.View>
@@ -337,7 +336,6 @@ function CategorySection({
                   device={d}
                   lastTemp={lastTemp}
                   lastHumidity={lastHumidity}
-                  liveBattery={liveState?.battery ?? null}
                   isActive={isActive}
                   onPress={() => navigation.navigate('DeviceDetail', { deviceId: d.device_id })}
                 />
@@ -456,10 +454,10 @@ export default function DashboardScreen({ navigation }: any) {
         </View>
       ) : (
         <ScrollView contentContainerStyle={ms.scroll} showsVerticalScrollIndicator={false}>
-          {freezers.length     > 0 && <CategorySection category="freezer"   devices={freezers}     navigation={navigation} sectionIndex={0} liveStates={liveStates} />}
-          {fridges.length      > 0 && <CategorySection category="fridge"    devices={fridges}      navigation={navigation} sectionIndex={1} liveStates={liveStates} />}
-          {coldRooms.length    > 0 && <CategorySection category="cold_room" devices={coldRooms}    navigation={navigation} sectionIndex={2} liveStates={liveStates} />}
-          {generalAreas.length > 0 && <CategorySection category="general"   devices={generalAreas} navigation={navigation} sectionIndex={3} liveStates={liveStates} />}
+          {freezers.length     > 0 && <CategorySection category="freezer"   devices={freezers}     navigation={navigation} sectionIndex={0} />}
+          {fridges.length      > 0 && <CategorySection category="fridge"    devices={fridges}      navigation={navigation} sectionIndex={1} />}
+          {coldRooms.length    > 0 && <CategorySection category="cold_room" devices={coldRooms}    navigation={navigation} sectionIndex={2} />}
+          {generalAreas.length > 0 && <CategorySection category="general"   devices={generalAreas} navigation={navigation} sectionIndex={3} />}
         </ScrollView>
       )}
     </SafeAreaView>

@@ -51,7 +51,7 @@ export default function App() {
         startScan();
         scanSubscription = onScanResult((devices: any[]) => {
           devices?.forEach(device => {
-            if (!device?.mac || device.type !== 3) return;
+            if (!device?.mac) return;
             setLiveSensorState(device.mac, {
               temperature: device.temperature,
               humidity: device.humidity,

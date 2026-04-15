@@ -62,15 +62,16 @@ export default function ScannerScreen({ navigation }: any) {
           if (!devices?.length) return;
 
           devices.forEach((device: any) => {
-            if (!device?.mac || device.type !== 3) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
-            });
+            if (device?.mac) {
+              setLiveSensorState(device.mac, {
+                temperature: device.temperature,
+                humidity: device.humidity,
+                battery: device.battery,
+              });
+            }
           });
 
-          const found = devices.find(device => device.mac && device.type === 3 && device.temperature != null);
+          const found = devices.find(device => device.mac && device.temperature != null);
           if (!found) return;
 
           scanLock.current = true;

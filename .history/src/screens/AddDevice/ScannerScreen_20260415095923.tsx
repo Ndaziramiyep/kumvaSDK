@@ -5,7 +5,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { startScan, stopScan, onScanResult } from '../../services/bluetoothService';
-import { setLiveSensorState } from '../../services/liveDeviceService';
 import { checkAllStatus, requestPermissions } from '../../utils/permissions';
 import { CameraView, Camera } from 'expo-camera';
 
@@ -61,16 +60,7 @@ export default function ScannerScreen({ navigation }: any) {
           if (!active || scanLock.current) return;
           if (!devices?.length) return;
 
-          devices.forEach((device: any) => {
-            if (!device?.mac || device.type !== 3) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
-            });
-          });
-
-          const found = devices.find(device => device.mac && device.type === 3 && device.temperature != null);
+          const found = devices.find(device => device.mac && device.temperature != null);
           if (!found) return;
 
           scanLock.current = true;

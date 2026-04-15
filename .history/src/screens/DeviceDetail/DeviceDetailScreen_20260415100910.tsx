@@ -11,7 +11,6 @@ import { getIncidentsByDevice } from '../../database/repositories/incidentReposi
 import { updateDeviceSync } from '../../database/repositories/deviceRepository';
 import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect } from '../../services/bluetoothService';
 import { addReading } from '../../services/cacheService';
-import { useLiveDeviceState } from '../../hooks/useLiveDevice';
 import { Reading } from '../../types/reading';
 
 const GRAPH_H = 110;
@@ -162,7 +161,6 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   const { deviceId } = route.params ?? {};
   const devices = useAppStore(s => s.devices);
   const device = devices.find(d => d.device_id === deviceId);
-  const liveState = useLiveDeviceState(device?.mac_address);
 
   const [readings, setReadings] = useState<Reading[]>([]);
   const [incidentCount, setIncidentCount] = useState(0);
@@ -193,9 +191,9 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   }
 
   const recent = getLastNDaysReadings(readings, 7);
-  const currentTemp = liveState?.temperature ?? null;
-  const currentHumidity = liveState?.humidity ?? null;
-  const currentBattery = liveState?.battery ?? device.battery_level;
+  const latestReading = readings[0];
+  const currentTemp = latestReading?.temperature ?? null;
+  const currentHumidity = latestReading?.humidity ?? null;
 
   // Build daily averages for graphs (7 buckets)
   const now = Date.now();
@@ -343,8 +341,8 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
         {/* Bottom 3 stats: Battery + Last Sync + Incidents */}
         <View style={styles.statsRow}>
           <StatCard iconName="battery-half-outline" iconColor="#22C55E" label="BATTERY"
-            value={currentBattery ?? '--'}
-            unit={currentBattery != null ? '%' : ''} />
+            value={device.battery_level ?? '--'}
+            unit={device.battery_level != null ? '%' : ''} />
           <StatCard iconName="sync-outline" iconColor="#5C6BC0" label="LAST SYNC"
             value={lastSyncMins !== null ? lastSyncMins : '--'}
             unit={lastSyncMins !== null ? 'min' : ''} />

@@ -188,12 +188,11 @@ function CategoryGraph({
 
 // ── Device grid card ──────────────────────────────────────────────────────────
 function DeviceCard({
-  device, lastTemp, lastHumidity, liveBattery, isActive, onPress,
+  device, lastTemp, lastHumidity, isActive, onPress,
 }: {
   device: Device;
   lastTemp: number | null;
   lastHumidity: number | null;
-  liveBattery?: number | null;
   isActive: boolean;
   onPress: () => void;
 }) {
@@ -253,7 +252,7 @@ function DeviceCard({
         <View style={dc.batteryRow}>
           <Ionicons name="battery-half-outline" size={12} color="#9CA3AF" />
           <Text style={dc.battery}>
-            {liveBattery != null ? `${liveBattery}%` : device.battery_level != null ? `${device.battery_level}%` : '--'}
+            {liveState?.battery != null ? `${liveState.battery}%` : device.battery_level != null ? `${device.battery_level}%` : '--'}
           </Text>
         </View>
       </Animated.View>
@@ -337,7 +336,6 @@ function CategorySection({
                   device={d}
                   lastTemp={lastTemp}
                   lastHumidity={lastHumidity}
-                  liveBattery={liveState?.battery ?? null}
                   isActive={isActive}
                   onPress={() => navigation.navigate('DeviceDetail', { deviceId: d.device_id })}
                 />

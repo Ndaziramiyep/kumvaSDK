@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Alert,
+  View, Text, TextInput, StyleSheet, TouchableOpacity, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { startScan, stopScan, onScanResult } from '../../services/bluetoothService';
-import { setLiveSensorState } from '../../services/liveDeviceService';
 import { checkAllStatus, requestPermissions } from '../../utils/permissions';
 import { CameraView, Camera } from 'expo-camera';
 
@@ -32,6 +31,7 @@ function normalizeMac(mac: string): string {
 export default function ScannerScreen({ navigation }: any) {
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [scanned, setScanned] = useState(false);
+  const [manualMac, setManualMac] = useState('');
   const scanLock = useRef(false);
   const scanActive = useRef(false);
   const scanSubscription = useRef<any>(null);
@@ -61,16 +61,7 @@ export default function ScannerScreen({ navigation }: any) {
           if (!active || scanLock.current) return;
           if (!devices?.length) return;
 
-          devices.forEach((device: any) => {
-            if (!device?.mac || device.type !== 3) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
-            });
-          });
-
-          const found = devices.find(device => device.mac && device.type === 3 && device.temperature != null);
+          const found = devices.find(device => device.mac && device.temperature != null);
           if (!found) return;
 
           scanLock.current = true;
@@ -216,12 +207,42 @@ export default function ScannerScreen({ navigation }: any) {
           <Text style={styles.permissionNote}>Camera permission denied. Enable it in Settings.</Text>
         )}
 
+        {/* Manual MAC entry */}
+        <Text style={styles.label}>Enter MAC address</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="AA:BB:CC:DD:EE:FF"
+          placeholderTextColor="#B0B8C8"
+          value={manualMac}
+          onChangeText={setManualMac}
+          autoCapitalize="characters"
+        />
         <TouchableOpacity
           style={styles.manualBtn}
+          onPress={() => {
+            const normalized = normalizeMac(manualMac);
+            if (!MAC_PATTERN.test(normalized)) {
+              Alert.alert('Invalid MAC', 'Please enter a valid MAC address like AA:BB:CC:DD:EE:FF.');
+              return;
+            }
+            navigation.navigate('DeviceConfig', {
+              scannedDevice: {
+                name: '',
+                macAddress: normalized,
+                category: 'freezer',
+              },
+            });
+          }}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.manualBtnText}>Use MAC and Configure</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.manualBtnSecondary}
           onPress={() => navigation.navigate('DeviceConfig', { scannedDevice: null })}
           activeOpacity={0.85}
         >
-          <Text style={styles.manualBtnText}>Register Device manually</Text>
+          <Text style={styles.manualBtnTextSecondary}>Register device manually</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -302,6 +323,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 20, fontWeight: '800', color: '#1C1C1E', textAlign: 'center' },
   subtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 22 },
   permissionNote: { fontSize: 12, color: '#EF4444', textAlign: 'center' },
+
   manualBtn: {
     backgroundColor: '#5C6BC0',
     borderRadius: 14,

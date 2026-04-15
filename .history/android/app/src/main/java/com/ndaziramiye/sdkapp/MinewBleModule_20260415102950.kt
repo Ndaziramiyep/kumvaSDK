@@ -31,7 +31,6 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     private data class DeviceData(
         val mac: String,
         val name: String,
-        var type: Int? = null,
         var sensorInstance: IndustrialHtSensor? = null,
         var temperature: Double? = null,
         var humidity: Double? = null,
@@ -51,27 +50,6 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     private val sendPasswordMethod by lazy {
         try { mBleManager.javaClass.getMethod("sendPassword", String::class.java, String::class.java) }
         catch (ignored: Exception) { null }
-    }
-
-    private fun getSensorType(sensor: IndustrialHtSensor): Int? {
-        return try {
-            val method = sensor.javaClass.getMethod("getType")
-            val result = method.invoke(sensor)
-            when (result) {
-                is Number -> result.toInt()
-                is String -> result.toIntOrNull()
-                else -> null
-            }
-        } catch (ignored: Exception) {
-            null
-        }
-    }
-
-    private fun isTemperatureHumiditySensor(sensor: IndustrialHtSensor, frame: IndustrialHtFrame?): Boolean {
-        val type = getSensorType(sensor)
-        if (type == 3) return true
-        if (sensor.name?.contains("MST01", ignoreCase = true) == true) return true
-        return frame != null
     }
 
     private val mConnStateListener = OnConnStateListener { mac, state ->
@@ -126,11 +104,8 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
             for (sensor in list) {
                 val mac = sensor.macAddress ?: continue
                 val industrialHtFrame = sensor.getMinewFrame(HtFrameType.INDUSTRIAL_HT_FRAME) as? IndustrialHtFrame
-                if (!isTemperatureHumiditySensor(sensor, industrialHtFrame)) continue
-                val sensorType = getSensorType(sensor)
                 val staticInfoFrame = sensor.getMinewFrame(HtFrameType.DEVICE_STATIC_INFO_FRAME) as? DeviceStaticInfoFrame
-                val data = discoveredDevices.getOrPut(mac) { DeviceData(mac, sensor.name ?: "Unknown", sensorType) }
-                data.type = sensorType
+                val data = discoveredDevices.getOrPut(mac) { DeviceData(mac, sensor.name ?: "Unknown") }
                 data.sensorInstance = sensor
                 data.rssi = sensor.rssi
                 data.lastSeen = System.currentTimeMillis()
@@ -184,7 +159,6 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
                     putString("mac", d.mac)
                     putString("identifier", d.mac)
                     putString("name", d.name)
-                    d.type?.let { putInt("type", it) }
                     d.temperature?.let { putDouble("temperature", it) }
                     d.humidity?.let { putDouble("humidity", it) }
                     d.battery?.let { putInt("battery", it) }
