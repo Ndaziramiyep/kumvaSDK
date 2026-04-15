@@ -1,0 +1,42 @@
+{
+  "name": "SDKapp",
+  "displayName": "SDKapp",
+  "expo": {
+    "name": "SDKapp",
+    "slug": "sdkapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0051db78-027a-44c6-9f54-6becb44c0371"
+      }
+    }
+  },
+  "extra": {
+    "eas": {
+      "projectId": "0051db78-027a-44c6-9f54-6becb44c0371"
+    }
+  }
+}
