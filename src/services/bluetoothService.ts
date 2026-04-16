@@ -3,22 +3,43 @@ import { NativeModules, NativeEventEmitter } from 'react-native';
 const { MinewBleModule } = NativeModules;
 const bleEvents = MinewBleModule ? new NativeEventEmitter(MinewBleModule) : null;
 
-export const startScan = () => MinewBleModule?.startScan();
-export const stopScan = () => MinewBleModule?.stopScan();
-export const connect = (macAddress: string) => MinewBleModule?.connectToDevice(macAddress, null);
-export const disConnect = (macAddress: string) => MinewBleModule?.disconnectDevice(macAddress);
-export const sendPassword = (macAddress: string, password: string) => MinewBleModule?.sendPassword(macAddress, password);
-export const readThHistoryData = (macAddress: string) => MinewBleModule?.readHistoryData(macAddress);
-export const readDoorHistoryData = (macAddress: string) => MinewBleModule?.readHistoryData(macAddress);
+// ── Scan ──────────────────────────────────────────────────────────────────────
+export const startScan  = () => MinewBleModule?.startScan();
+export const stopScan   = () => MinewBleModule?.stopScan();
 
-export const onScanResult = (callback: (devices: any[]) => void) =>
-  bleEvents?.addListener('onDevicesUpdated', callback);
+// ── Connect ───────────────────────────────────────────────────────────────────
+export const connect    = (mac: string) => MinewBleModule?.connectToDevice(mac, null);
+export const disConnect = (mac: string) => MinewBleModule?.disconnectDevice(mac);
 
-export const onConnState = (callback: (event: any) => void) =>
-  bleEvents?.addListener('onConnectionChange', callback);
+// ── Read/Write ────────────────────────────────────────────────────────────────
+export const readThHistoryData = (mac: string) => MinewBleModule?.readHistoryData(mac);
 
-export const onThHistoryData = (callback: (data: any) => void) =>
-  bleEvents?.addListener('onHistoryDataReceived', callback);
+export const setTemperatureUnit = (mac: string, isCelsius: boolean): Promise<boolean> =>
+  MinewBleModule?.setTemperatureUnit(mac, isCelsius) ?? Promise.resolve(false);
 
-export const onDoorHistoryData = (callback: (data: any) => void) =>
-  bleEvents?.addListener('onHistoryDataReceived', callback);
+export const setThAlarmValue = (
+  mac: string, minTemp: number, maxTemp: number, minHumi: number, maxHumi: number
+): Promise<boolean> =>
+  MinewBleModule?.setThAlarmValue(mac, minTemp, maxTemp, minHumi, maxHumi) ?? Promise.resolve(false);
+
+export const setThAlarmOff = (mac: string): Promise<boolean> =>
+  MinewBleModule?.setThAlarmOff(mac) ?? Promise.resolve(false);
+
+export const setOpenHistoryDataStore = (mac: string, isOpen: boolean): Promise<boolean> =>
+  MinewBleModule?.setOpenHistoryDataStore(mac, isOpen) ?? Promise.resolve(false);
+
+export const resetDevice = (mac: string): Promise<boolean> =>
+  MinewBleModule?.resetDevice(mac) ?? Promise.resolve(false);
+
+// ── Event listeners ───────────────────────────────────────────────────────────
+export const onScanResult = (cb: (devices: any[]) => void) =>
+  bleEvents?.addListener('onDevicesUpdated', cb);
+
+export const onConnState = (cb: (event: any) => void) =>
+  bleEvents?.addListener('onConnectionChange', cb);
+
+export const onThHistoryData = (cb: (data: any) => void) =>
+  bleEvents?.addListener('onHistoryDataReceived', cb);
+
+export const onScanError = (cb: (event: any) => void) =>
+  bleEvents?.addListener('onScanError', cb);

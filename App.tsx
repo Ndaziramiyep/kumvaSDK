@@ -5,7 +5,7 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { initDb } from './src/database/db';
 import { requestNotificationPermissions } from './src/services/notificationService';
 import { checkAllStatus, requestPermissions } from './src/utils/permissions';
-import { onScanResult, startScan, stopScan } from './src/services/bluetoothService';
+import { onScanResult, onConnState, startScan, stopScan } from './src/services/bluetoothService';
 import { setLiveSensorState } from './src/services/liveDeviceService';
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
@@ -37,50 +37,62 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    let scanSubscription: any;
+    let scanSub: any;
+    let connSub: any;
     let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-    function startBleScan() {
+    // Per SDK docs: scan ~90s, then stop and restart to keep scanning
+    function doStartScan() {
       if (!active) return;
+      if (restartTimer) clearTimeout(restartTimer);
       startScan();
-      // Kotlin scan runs for 5 min then stops — restart it automatically
       restartTimer = setTimeout(() => {
-        if (active) startBleScan();
-      }, 5 * 60 * 1000);
+        if (active) doStartScan();
+      }, 90_000);
     }
 
-    async function initBleScan() {
+    async function init() {
       try {
         const status = await checkAllStatus();
         if (status !== 'granted') {
-          const requested = await requestPermissions();
-          if (requested !== 'granted') return;
+          const req = await requestPermissions();
+          if (req !== 'granted') return;
         }
         if (!active) return;
 
-        scanSubscription = onScanResult((devices: any[]) => {
-          devices?.forEach(device => {
-            if (!device?.mac) return;
-            setLiveSensorState(device.mac, {
-              temperature: device.temperature,
-              humidity: device.humidity,
-              battery: device.battery,
+        // Feed live state from every scan result
+        scanSub = onScanResult((devices: any[]) => {
+          devices?.forEach(d => {
+            if (!d?.mac) return;
+            setLiveSensorState(d.mac, {
+              temperature: d.temperature,
+              humidity: d.humidity,
+              battery: d.battery,
             });
           });
         });
 
-        startBleScan();
+        // SDK stops scan when connect() is called — restart after disconnect
+        connSub = onConnState((event: any) => {
+          if (!active) return;
+          if (event?.state === 'disconnected' || event?.state === 'firmware_upgrade_success') {
+            doStartScan();
+          }
+        });
+
+        doStartScan();
       } catch (e) {
-        console.error('BLE scan init failed', e);
+        console.error('BLE init failed', e);
       }
     }
 
-    initBleScan();
+    init();
 
     return () => {
       active = false;
       if (restartTimer) clearTimeout(restartTimer);
-      scanSubscription?.remove?.();
+      scanSub?.remove?.();
+      connSub?.remove?.();
       stopScan();
     };
   }, []);

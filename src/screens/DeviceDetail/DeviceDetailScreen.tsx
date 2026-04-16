@@ -9,7 +9,7 @@ import { useAppStore } from '../../store/store';
 import { getReadingsByDevice, insertReadings } from '../../database/repositories/readingRepository';
 import { getIncidentsByDevice } from '../../database/repositories/incidentRepository';
 import { updateDeviceSync } from '../../database/repositories/deviceRepository';
-import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect } from '../../services/bluetoothService';
+import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect, setThAlarmValue, setOpenHistoryDataStore } from '../../services/bluetoothService';
 import { exportPdf } from '../../services/exportService';
 import { useLiveDeviceState } from '../../hooks/useLiveDevice';
 import { Reading } from '../../types/reading';
@@ -276,7 +276,28 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
         connect(device.mac_address);
       });
 
-      // Step 2: request history and wait for the callback
+      // Step 2a: enable history storage on device (idempotent, 5s timeout)
+      try {
+        await Promise.race([
+          setOpenHistoryDataStore(device.mac_address, true),
+          new Promise(r => setTimeout(r, 5000)),
+        ]);
+      } catch (_) {}
+
+      // Step 2b: push alarm thresholds to device (5s timeout)
+      try {
+        await Promise.race([
+          setThAlarmValue(
+            device.mac_address,
+            Math.round(device.temp_low_threshold),
+            Math.round(device.temp_high_threshold),
+            0, 100
+          ),
+          new Promise(r => setTimeout(r, 5000)),
+        ]);
+      } catch (_) {}
+
+      // Step 3: request history and wait for the callback
       const historyItems = await new Promise<any[]>((resolve, reject) => {
         histTimer = setTimeout(() => resolve([]), 30000); // resolve empty on timeout — don't fail
         historySubscription = onThHistoryData((event: any) => {
