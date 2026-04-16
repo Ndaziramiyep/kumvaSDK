@@ -31,13 +31,28 @@ function addDays(ts: number, days: number): number {
 }
 
 // Simple inline date picker (year/month/day wheels not available without library — use modal with calendar grid)
+const THREE_MONTHS_AGO = (() => {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 3);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+})();
+
+const TODAY_END = (() => {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+})();
+
 function DatePickerModal({
-  visible, value, onConfirm, onCancel,
+  visible, value, onConfirm, onCancel, minDate, maxDate,
 }: {
   visible: boolean;
   value: number;
   onConfirm: (ts: number) => void;
   onCancel: () => void;
+  minDate: number;
+  maxDate: number;
 }) {
   const [current, setCurrent] = useState(new Date(value));
   const year = current.getFullYear();
@@ -52,11 +67,19 @@ function DatePickerModal({
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
 
-  const prevMonth = () => setCurrent(new Date(year, month - 1, 1));
-  const nextMonth = () => setCurrent(new Date(year, month + 1, 1));
+  const isDayDisabled = (day: number) => {
+    const ts = new Date(year, month, day).getTime();
+    return ts < minDate || ts > maxDate;
+  };
+
+  const canGoPrev = new Date(year, month - 1 + 1, 0).getTime() >= minDate;
+  const canGoNext = new Date(year, month + 1, 1).getTime() <= maxDate;
+
+  const prevMonth = () => { if (canGoPrev) setCurrent(new Date(year, month - 1, 1)); };
+  const nextMonth = () => { if (canGoNext) setCurrent(new Date(year, month + 1, 1)); };
 
   const selectDay = (day: number) => {
-    onConfirm(new Date(year, month, day).getTime());
+    if (!isDayDisabled(day)) onConfirm(new Date(year, month, day).getTime());
   };
 
   const selectedDay = new Date(value).getDate();
@@ -68,9 +91,13 @@ function DatePickerModal({
       <View style={dp.overlay}>
         <View style={dp.container}>
           <View style={dp.header}>
-            <TouchableOpacity onPress={prevMonth}><Text style={dp.arrow}>‹</Text></TouchableOpacity>
+            <TouchableOpacity onPress={prevMonth} disabled={!canGoPrev}>
+              <Text style={[dp.arrow, !canGoPrev && dp.arrowDisabled]}>‹</Text>
+            </TouchableOpacity>
             <Text style={dp.monthYear}>{MONTHS[month]} {year}</Text>
-            <TouchableOpacity onPress={nextMonth}><Text style={dp.arrow}>›</Text></TouchableOpacity>
+            <TouchableOpacity onPress={nextMonth} disabled={!canGoNext}>
+              <Text style={[dp.arrow, !canGoNext && dp.arrowDisabled]}>›</Text>
+            </TouchableOpacity>
           </View>
           <View style={dp.weekRow}>
             {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
@@ -78,18 +105,22 @@ function DatePickerModal({
             ))}
           </View>
           <View style={dp.grid}>
-            {cells.map((day, i) => (
-              <TouchableOpacity
-                key={i}
-                style={[dp.cell, day && isCurrentMonth && day === selectedDay && dp.cellSelected]}
-                onPress={() => day && selectDay(day)}
-                disabled={!day}
-              >
-                <Text style={[dp.cellText, day && isCurrentMonth && day === selectedDay && dp.cellTextSelected]}>
-                  {day ?? ''}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {cells.map((day, i) => {
+              const disabled = !day || isDayDisabled(day);
+              const selected = !!day && isCurrentMonth && day === selectedDay;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[dp.cell, selected && dp.cellSelected, disabled && dp.cellDisabled]}
+                  onPress={() => day && selectDay(day)}
+                  disabled={disabled}
+                >
+                  <Text style={[dp.cellText, selected && dp.cellTextSelected, disabled && dp.cellTextDisabled]}>
+                    {day ?? ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
           <View style={dp.actions}>
             <TouchableOpacity onPress={onCancel} style={dp.cancelBtn}>
@@ -347,12 +378,16 @@ export default function ReportsScreen() {
       <DatePickerModal
         visible={showStartPicker}
         value={startDate}
+        minDate={THREE_MONTHS_AGO}
+        maxDate={TODAY_END}
         onConfirm={ts => { setStartDate(ts); setShowStartPicker(false); setTimeRange('Custom'); setHasGenerated(false); }}
         onCancel={() => setShowStartPicker(false)}
       />
       <DatePickerModal
         visible={showEndPicker}
         value={endDate}
+        minDate={THREE_MONTHS_AGO}
+        maxDate={TODAY_END}
         onConfirm={ts => { setEndDate(ts); setShowEndPicker(false); setTimeRange('Custom'); setHasGenerated(false); }}
         onCancel={() => setShowEndPicker(false)}
       />
@@ -458,6 +493,9 @@ const dp = StyleSheet.create({
   cellSelected: { backgroundColor: '#5C6BC0' },
   cellText: { fontSize: 13, color: '#1C1C1E' },
   cellTextSelected: { color: '#fff', fontWeight: '700' },
+  cellDisabled: { opacity: 0.25 },
+  cellTextDisabled: { color: '#9CA3AF' },
+  arrowDisabled: { opacity: 0.25 },
   actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 16 },
   cancelBtn: { paddingHorizontal: 16, paddingVertical: 8 },
   cancelText: { fontSize: 14, color: '#9CA3AF' },

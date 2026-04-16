@@ -7,6 +7,7 @@ import { requestNotificationPermissions } from './src/services/notificationServi
 import { checkAllStatus, requestPermissions } from './src/utils/permissions';
 import { onScanResult, onConnState, startScan, stopScan } from './src/services/bluetoothService';
 import { setLiveSensorState } from './src/services/liveDeviceService';
+import { startAutoSync, stopAutoSync } from './src/services/autoSyncService';
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
   state = { error: null };

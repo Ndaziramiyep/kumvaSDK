@@ -5,7 +5,7 @@ import {
   CREATE_INCIDENTS_TABLE,
   CREATE_REPORTS_TABLE,
   CREATE_REMINDERS_TABLE,
-} from './schema';
+} from '../../../src/database/schema';
 
 let db: any | null = null;
 let readyPromise: Promise<any> | null = null;
