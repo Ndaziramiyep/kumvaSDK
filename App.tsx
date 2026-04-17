@@ -4,11 +4,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 import { initDb } from './src/database/db';
 import { requestNotificationPermissions } from './src/services/notificationService';
-import { checkAllStatus, requestPermissions } from './src/utils/permissions';
+import * as ExpoNotifications from 'expo-notifications';
+import { checkAllStatus, requestPermissions, openAppSettings, openLocationSettings, PermissionStatus } from './src/utils/permissions';
 import { onScanResult, onConnState, startScan, stopScan } from './src/services/bluetoothService';
 import { setLiveSensorState } from './src/services/liveDeviceService';
 import { startAutoSync, stopAutoSync } from './src/services/autoSyncService';
 import { restoreSecretKey } from './src/services/secretKeyService';
+import BluetoothPermissionModal from './src/components/common/BluetoothPermissionModal';
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
   state = { error: null };
@@ -29,6 +31,7 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: st
 export default function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [permStatus, setPermStatus] = useState<Exclude<PermissionStatus, 'granted'> | null>(null);
 
   useEffect(() => {
     initDb()
@@ -44,19 +47,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Listen for notification taps — navigate to Notifications screen
+    const sub = ExpoNotifications.addNotificationResponseReceivedListener(() => {
+      // Navigation ref not available here; the bell icon in dashboard handles it
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
     let active = true;
     let scanSub: any;
     let connSub: any;
     let restartTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Per SDK docs: scan ~90s, then stop and restart to keep scanning
     function doStartScan() {
       if (!active) return;
       if (restartTimer) clearTimeout(restartTimer);
       startScan();
-      restartTimer = setTimeout(() => {
-        if (active) doStartScan();
-      }, 90_000);
+      restartTimer = setTimeout(() => { if (active) doStartScan(); }, 90_000);
     }
 
     async function init() {
@@ -64,11 +72,17 @@ export default function App() {
         const status = await checkAllStatus();
         if (status !== 'granted') {
           const req = await requestPermissions();
-          if (req !== 'granted') return;
+          if (req !== 'granted') {
+            const recheckStatus = await checkAllStatus();
+            if (recheckStatus !== 'granted') {
+              setPermStatus(recheckStatus as Exclude<PermissionStatus, 'granted'>);
+              return;
+            }
+          }
         }
         if (!active) return;
+        setPermStatus(null);
 
-        // Feed live state from every scan result
         scanSub = onScanResult((devices: any[]) => {
           devices?.forEach(d => {
             if (!d?.mac) return;
@@ -80,7 +94,6 @@ export default function App() {
           });
         });
 
-        // SDK stops scan when connect() is called — restart after disconnect
         connSub = onConnState((event: any) => {
           if (!active) return;
           if (event?.state === 'disconnected' || event?.state === 'firmware_upgrade_success') {
@@ -116,10 +129,30 @@ export default function App() {
 
   if (!ready) return null;
 
+  const handlePermAction = async () => {
+    if (permStatus === 'denied') {
+      openAppSettings();
+    } else if (permStatus === 'location_off') {
+      openLocationSettings();
+    } else {
+      const req = await requestPermissions();
+      if (req === 'granted') {
+        setPermStatus(null);
+        startScan();
+      } else {
+        const s = await checkAllStatus();
+        if (s !== 'granted') setPermStatus(s as Exclude<PermissionStatus, 'granted'>);
+      }
+    }
+  };
+
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
         <AppNavigator />
+        {permStatus !== null && (
+          <BluetoothPermissionModal status={permStatus} onPrimaryAction={handlePermAction} />
+        )}
       </ErrorBoundary>
     </SafeAreaProvider>
   );

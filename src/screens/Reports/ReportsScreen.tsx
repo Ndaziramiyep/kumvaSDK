@@ -369,18 +369,18 @@ export default function ReportsScreen() {
               </View>
 
               <View style={styles.tableHead}>
-                <Text style={[styles.th, { flex: 2 }]}>Device</Text>
-                <Text style={[styles.th, { flex: 1.2 }]}>Temp</Text>
-                <Text style={[styles.th, { flex: 1.2 }]}>Hum</Text>
-                <Text style={[styles.th, { flex: 2 }]}>Date & Time</Text>
+                <Text style={[styles.th, styles.colDevice]}>Device</Text>
+                <Text style={[styles.th, styles.colTemp]}>Temp</Text>
+                <Text style={[styles.th, styles.colHum]}>Hum</Text>
+                <Text style={[styles.th, styles.colTime]}>Date & Time</Text>
               </View>
 
               {reportRows.slice(0, 8).map((row, i) => (
                 <View key={i} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
-                  <Text style={[styles.td, { flex: 2 }]} numberOfLines={1}>{row.device}</Text>
-                  <Text style={[styles.td, { flex: 1.2 }]}>{row.temperature}°</Text>
-                  <Text style={[styles.td, { flex: 1.2 }]}>{row.humidity !== '--' ? `${row.humidity}%` : '--'}</Text>
-                  <Text style={[styles.td, { flex: 2 }]} numberOfLines={2}>{row.timestamp}</Text>
+                  <Text style={[styles.td, styles.colDevice]} numberOfLines={1}>{row.device}</Text>
+                  <Text style={[styles.td, styles.colTemp]}>{Number(row.temperature).toFixed(1)}°</Text>
+                  <Text style={[styles.td, styles.colHum]}>{row.humidity !== '--' ? `${Number(row.humidity).toFixed(0)}%` : '--'}</Text>
+                  <Text style={[styles.td, styles.colTime]} numberOfLines={2}>{row.timestamp}</Text>
                 </View>
               ))}
               {reportRows.length > 8 && (
@@ -486,10 +486,16 @@ const styles = StyleSheet.create({
   moreRows: { fontSize: 11, color: '#9CA3AF', textAlign: 'center', padding: 10 },
 
   tableHead: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#F8F9FF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
-  th: { fontSize: 10, fontWeight: '700', color: '#6B7280', letterSpacing: 0.4 },
+  th: { fontSize: 10, fontWeight: '700', color: '#6B7280', letterSpacing: 0.4, textAlign: 'center' },
   tableRow: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10 },
   tableRowAlt: { backgroundColor: '#FAFBFF' },
-  td: { fontSize: 12, color: '#1C1C1E', lineHeight: 17 },
+  td: { fontSize: 12, color: '#1C1C1E', lineHeight: 17, textAlign: 'center' },
+
+  // Fixed column widths — header and data cells use the same style
+  colDevice: { flex: 2, textAlign: 'left' },
+  colTemp:   { width: 52, textAlign: 'center' },
+  colHum:    { width: 52, textAlign: 'center' },
+  colTime:   { flex: 2, textAlign: 'right' },
 
   exportRow: { flexDirection: 'row', gap: 12, padding: 16, backgroundColor: '#F4F6FB', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#E0E0E0' },
   exportBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#5C6BC0', borderRadius: 14, paddingVertical: 16, shadowColor: '#5C6BC0', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 5 },

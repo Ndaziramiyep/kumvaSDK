@@ -5,6 +5,7 @@ import {
   CREATE_INCIDENTS_TABLE,
   CREATE_REPORTS_TABLE,
   CREATE_REMINDERS_TABLE,
+  CREATE_NOTIFICATIONS_TABLE,
 } from './schema';
 
 SQLite.enablePromise(true);
@@ -38,7 +39,8 @@ export async function getReadyDb(): Promise<any> {
   await raw.executeSql(CREATE_INCIDENTS_TABLE);
   await raw.executeSql(CREATE_REPORTS_TABLE);
   await raw.executeSql(CREATE_REMINDERS_TABLE);
-  // Migration: add secret_key column if it doesn't exist yet
+  await raw.executeSql(CREATE_NOTIFICATIONS_TABLE);
+  // Migrations column if it doesn't exist yet
   await raw.executeSql(`ALTER TABLE devices ADD COLUMN secret_key TEXT`).catch(() => {});
   // Migration: add last_synced_at column if it doesn't exist yet
   await raw.executeSql(`ALTER TABLE devices ADD COLUMN last_synced_at INTEGER`).catch(() => {});

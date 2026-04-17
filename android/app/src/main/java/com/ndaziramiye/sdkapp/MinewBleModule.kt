@@ -28,6 +28,8 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     }
 
     private val scannedSensors = mutableMapOf<String, IndustrialHtSensor>()
+    private val lastTemp = mutableMapOf<String, Double>()
+    private val lastHum  = mutableMapOf<String, Double>()
     private var scanning = false
 
     private fun emit(event: String, data: Any) {
@@ -67,11 +69,15 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     // ── Scan ──────────────────────────────────────────────────────────────────
     @ReactMethod
     fun startScan() {
-        if (scanning) return
         if (!BLETool.isBluetoothTurnOn(reactContext)) {
             emit("onScanError", Arguments.createMap().apply { putString("error", "bluetooth_off") })
             return
         }
+        if (scanning) {
+            manager.stopScan(reactContext)
+            scanning = false
+        }
+        manager.clearScanResult()
         scanning = true
         manager.startScan(reactContext, 90_000, object : OnScanSensorResultListener {
             override fun onScanResult(list: MutableList<IndustrialHtSensor>) {
@@ -88,38 +94,35 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
         synchronized(scannedSensors) {
             for (sensor in list) {
                 val mac = sensor.macAddress ?: continue
-                val htFrame = sensor.getMinewFrame(HtFrameType.INDUSTRIAL_HT_FRAME) as? IndustrialHtFrame
-                val staticFrame = sensor.getMinewFrame(HtFrameType.DEVICE_STATIC_INFO_FRAME) as? DeviceStaticInfoFrame
-
-                // Resolve temperature — try direct frame first, then reflection fallback
-                val temp: Double?
-                val hum: Double?
-                if (htFrame != null) {
-                    val t = htFrame.temperature.toDouble()
-                    val h = htFrame.humidity.toDouble()
-                    temp = if (t.isFinite()) t else null
-                    hum  = if (h.isFinite()) h else null
-                } else {
-                    temp = readDoubleReflect(sensor, listOf("getTemperature", "getTemp"))
-                    hum  = readDoubleReflect(sensor, listOf("getHumidity", "getHumi"))
-                }
-
-                // Only emit if we have real data
-                if (temp == null) continue
-
                 scannedSensors[mac] = sensor
 
+                val htFrame     = sensor.getMinewFrame(HtFrameType.INDUSTRIAL_HT_FRAME)     as? IndustrialHtFrame
+                val staticFrame = sensor.getMinewFrame(HtFrameType.DEVICE_STATIC_INFO_FRAME) as? DeviceStaticInfoFrame
+
+                // Update cache whenever a valid frame arrives
+                if (htFrame != null && !htFrame.isTemperatureInvalid) {
+                    val t = htFrame.temperature.toDouble()
+                    val h = htFrame.humidity.toDouble()
+                    if (t.isFinite()) lastTemp[mac] = t
+                    if (h.isFinite() && !htFrame.isHumidityInvalid) lastHum[mac] = h
+                }
+
+                // Skip only if we have never received TH data for this MAC
+                val temp = lastTemp[mac] ?: continue
+                val hum  = lastHum[mac]  ?: 0.0
+
                 emitList.pushMap(Arguments.createMap().apply {
-                    putString("mac", mac)
-                    putString("name", sensor.name ?: "S3")
-                    putInt("rssi", sensor.rssi)
+                    putString("mac",         mac)
+                    putString("name",        sensor.name ?: "S3")
+                    putInt(   "rssi",        sensor.rssi)
                     putDouble("temperature", temp)
-                    putDouble("humidity", hum ?: 0.0)
-                    staticFrame?.battery?.let { putInt("battery", it) }
+                    putDouble("humidity",    hum)
+                    staticFrame?.let { putInt("battery", it.battery) }
                 })
             }
         }
-        if (emitList.size() > 0) emit("onDevicesUpdated", emitList)
+        // Always emit so JS knows the scan is alive, even if list is empty
+        emit("onDevicesUpdated", emitList)
     }
 
     private fun readDoubleReflect(obj: Any, methods: List<String>): Double? {

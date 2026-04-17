@@ -9,6 +9,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useDevices } from '../../hooks/useDevices';
 import { getReadingsLast7Days } from '../../database/repositories/readingRepository';
 import { countIncidentsByDevice } from '../../database/repositories/incidentRepository';
+import { getUnreadCount } from '../../services/notificationService';
 import { Device, DeviceCategory } from '../../types/device';
 import { Reading } from '../../types/reading';
 import { useLiveDeviceStates } from '../../hooks/useLiveDevice';
@@ -400,6 +401,13 @@ export default function DashboardScreen({ navigation }: any) {
   const isEmpty = devices.length === 0;
   const bellShake   = useBellShake();
   const addBtnScale = useRef(new Animated.Value(1)).current;
+  const [notifCount, setNotifCount] = useState(0);
+
+  useEffect(() => {
+    getUnreadCount().then(setNotifCount).catch(() => {});
+    const interval = setInterval(() => getUnreadCount().then(setNotifCount).catch(() => {}), 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!isEmpty) return;
@@ -436,12 +444,17 @@ export default function DashboardScreen({ navigation }: any) {
           </Pressable>
           <TouchableOpacity
             style={ms.bellBtn}
-            onPress={() => navigation.navigate('Notifications')}
+            onPress={() => { setNotifCount(0); navigation.navigate('Notifications'); }}
             activeOpacity={0.7}
           >
             <Animated.View style={{ transform: [{ translateX: bellShake }] }}>
               <Ionicons name="notifications-outline" size={22} color="#5C6BC0" />
             </Animated.View>
+            {notifCount > 0 && (
+              <View style={ms.notifBadge}>
+                <Text style={ms.notifBadgeText}>{notifCount > 99 ? '99+' : notifCount}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -528,6 +541,15 @@ const ms = StyleSheet.create({
     backgroundColor: '#EEF0FB',
     alignItems: 'center', justifyContent: 'center',
   },
+  notifBadge: {
+    position: 'absolute', top: -4, right: -4,
+    backgroundColor: '#EF4444', borderRadius: 8,
+    minWidth: 16, height: 16,
+    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1.5, borderColor: '#fff',
+  },
+  notifBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff' },
   scroll:     { paddingBottom: 48 },
   emptyWrap:  {
     flex: 1, alignItems: 'center', justifyContent: 'center',

@@ -57,3 +57,15 @@ export const CREATE_REMINDERS_TABLE = `
     is_active INTEGER NOT NULL DEFAULT 1
   );
 `;
+
+export const CREATE_NOTIFICATIONS_TABLE = `
+  CREATE TABLE IF NOT EXISTS notifications (
+    notif_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    device_id TEXT,
+    timestamp INTEGER NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0
+  );
+`;

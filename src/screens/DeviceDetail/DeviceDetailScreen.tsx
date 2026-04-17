@@ -504,16 +504,20 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
               <Text style={styles.tableHeader}>Count</Text>
             </View>
             {tempPoints.map((p, i) => {
-              const d = new Date(now - (6 - p.i) * 86400000);
               const dayStart = now - (6 - p.i) * 86400000;
-              const dayEnd = dayStart + 86400000;
-              const vals = recent7.filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd).map(r => r.temperature);
+              const dayEnd   = dayStart + 86400000;
+              const d = new Date(dayStart);
+              const vals = recent7
+                .filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd)
+                .map(r => r.temperature);
+              const minVal = vals.length ? Math.min(...vals) : p.val;
+              const maxVal = vals.length ? Math.max(...vals) : p.val;
               return (
                 <View key={i} style={{flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2}}>
                   <Text style={styles.tableCell}>{`${d.toLocaleString('en',{month:'short'})} ${d.getDate()}`}</Text>
                   <Text style={styles.tableCell}>{p.val.toFixed(1)}</Text>
-                  <Text style={styles.tableCell}>{Math.min(...vals).toFixed(1)}</Text>
-                  <Text style={styles.tableCell}>{Math.max(...vals).toFixed(1)}</Text>
+                  <Text style={styles.tableCell}>{minVal.toFixed(1)}</Text>
+                  <Text style={styles.tableCell}>{maxVal.toFixed(1)}</Text>
                   <Text style={styles.tableCell}>{vals.length}</Text>
                 </View>
               );

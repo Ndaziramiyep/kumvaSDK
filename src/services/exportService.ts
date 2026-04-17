@@ -6,6 +6,14 @@ import ExcelJS from 'exceljs';
 import { Device } from '../types/device';
 import { Reading } from '../types/reading';
 import { getReadingsByDevice } from '../database/repositories/readingRepository';
+import { KUMVA_LOGO_BASE64 } from './logoBase64';
+
+// ── Logo helpers ─────────────────────────────────────────────────────────────────
+const LOGO_DATA_URI = `data:image/png;base64,${KUMVA_LOGO_BASE64}`;
+const LOGO_HTML     = `<img src="${LOGO_DATA_URI}" style="height:60px;width:auto;object-fit:contain" alt="Kumva Insights"/>`;
+
+function getLogoDataUri(): string  { return LOGO_DATA_URI; }
+function getLogoBase64(): string   { return KUMVA_LOGO_BASE64; }
 
 // ── Timestamp ─────────────────────────────────────────────────────────────────
 function ts(): string {
@@ -53,74 +61,100 @@ async function saveFile(cacheUri: string, filename: string, mimeType: string): P
   return cacheUri;
 }
 
-// ── SVG line graph ────────────────────────────────────────────────────────────
-function buildSvgGraph(readings: Reading[], highThreshold: number, lowThreshold: number): string {
-  const W = 580, H = 160, PAD = { top: 14, right: 12, bottom: 36, left: 44 };
+// ── SVG graph builder (single metric) ────────────────────────────────────────
+function buildSvgLine(
+  readings: Reading[],
+  getValue: (r: Reading) => number | null,
+  color: string,
+  thresholdHigh?: number,
+  thresholdLow?: number,
+  unit: string = '',
+): string {
+  const W = 580, H = 140, PAD = { top: 14, right: 12, bottom: 36, left: 44 };
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
 
-  if (readings.length < 2) {
+  const validReadings = readings.filter(r => getValue(r) !== null);
+  if (validReadings.length < 2) {
     return `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+      <rect x="0" y="0" width="${W}" height="${H}" fill="#FAFBFF" rx="4"/>
       <text x="${W/2}" y="${H/2}" text-anchor="middle" font-size="11" fill="#9CA3AF">No data</text>
     </svg>`;
   }
 
-  const temps = readings.map(r => r.temperature);
-  const hums  = readings.map(r => r.humidity ?? 0);
-  const times = readings.map(r => r.timestamp);
+  const values = validReadings.map(r => getValue(r) as number);
+  const times  = validReadings.map(r => r.timestamp);
 
-  const minT = Math.min(...temps, lowThreshold) - 2;
-  const maxT = Math.max(...temps, highThreshold) + 2;
-  const minH = Math.min(...hums) - 5;
-  const maxH = Math.max(...hums) + 5;
+  const extras: number[] = [];
+  if (thresholdHigh !== undefined) extras.push(thresholdHigh);
+  if (thresholdLow  !== undefined) extras.push(thresholdLow);
+
+  const minV = Math.min(...values, ...extras) - 2;
+  const maxV = Math.max(...values, ...extras) + 2;
+  const range = maxV - minV || 1;
+
   const minTime = times[0], maxTime = times[times.length - 1];
   const timeRange = maxTime - minTime || 1;
 
   const tx = (t: number) => PAD.left + ((t - minTime) / timeRange) * plotW;
-  const tyT = (v: number) => PAD.top + plotH - ((v - minT) / (maxT - minT)) * plotH;
-  const tyH = (v: number) => PAD.top + plotH - ((v - minH) / (maxH - minH)) * plotH;
+  const ty = (v: number) => PAD.top + plotH - ((v - minV) / range) * plotH;
 
-  // Build polyline points
-  const tempPts = readings.map(r => `${tx(r.timestamp).toFixed(1)},${tyT(r.temperature).toFixed(1)}`).join(' ');
-  const humPts  = readings.map(r => `${tx(r.timestamp).toFixed(1)},${tyH(r.humidity ?? 0).toFixed(1)}`).join(' ');
+  const pts = validReadings.map(r => `${tx(r.timestamp).toFixed(1)},${ty(getValue(r) as number).toFixed(1)}`).join(' ');
 
-  // X axis labels (5 evenly spaced)
-  const xLabels = Array.from({length: 5}, (_, i) => {
+  const xLabels = Array.from({ length: 5 }, (_, i) => {
     const t = minTime + (i / 4) * timeRange;
     const d = new Date(t);
     return { x: tx(t), label: `${d.toLocaleString('en',{month:'short'})} ${d.getDate()}, ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` };
   });
 
-  // Y axis labels (5 evenly spaced for temp)
-  const yLabels = Array.from({length: 5}, (_, i) => {
-    const v = maxT - (i / 4) * (maxT - minT);
-    return { y: tyT(v), label: v.toFixed(0) };
+  const yLabels = Array.from({ length: 5 }, (_, i) => {
+    const v = maxV - (i / 4) * (maxV - minV);
+    return { y: ty(v), label: `${v.toFixed(1)}${unit}` };
   });
 
-  const highY = tyT(highThreshold);
-  const lowY  = tyT(lowThreshold);
+  const highY = thresholdHigh !== undefined ? ty(thresholdHigh) : null;
+  const lowY  = thresholdLow  !== undefined ? ty(thresholdLow)  : null;
 
   return `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-    <!-- Grid lines -->
-    ${yLabels.map(l => `<line x1="${PAD.left}" y1="${l.y.toFixed(1)}" x2="${W-PAD.right}" y2="${l.y.toFixed(1)}" stroke="#E5E7EB" stroke-width="0.5"/>`).join('')}
-    <!-- Threshold lines -->
-    <line x1="${PAD.left}" y1="${highY.toFixed(1)}" x2="${W-PAD.right}" y2="${highY.toFixed(1)}" stroke="#EF4444" stroke-width="1" stroke-dasharray="4,3"/>
-    <line x1="${PAD.left}" y1="${lowY.toFixed(1)}"  x2="${W-PAD.right}" y2="${lowY.toFixed(1)}"  stroke="#3B82F6" stroke-width="1" stroke-dasharray="4,3"/>
-    <!-- Humidity line -->
-    <polyline points="${humPts}" fill="none" stroke="#06B6D4" stroke-width="1" opacity="0.6"/>
-    <!-- Temperature line -->
-    <polyline points="${tempPts}" fill="none" stroke="#22C55E" stroke-width="1.5"/>
-    <!-- Axes -->
+    <rect x="0" y="0" width="${W}" height="${H}" fill="#FAFBFF" rx="4"/>
+    ${yLabels.map(l => `<line x1="${PAD.left}" y1="${l.y.toFixed(1)}" x2="${W-PAD.right}" y2="${l.y.toFixed(1)}" stroke="#E5E7EB" stroke-width="0.5"/>`)  .join('')}
+    ${highY !== null ? `<line x1="${PAD.left}" y1="${highY.toFixed(1)}" x2="${W-PAD.right}" y2="${highY.toFixed(1)}" stroke="#EF4444" stroke-width="1" stroke-dasharray="4,3"/>` : ''}
+    ${lowY  !== null ? `<line x1="${PAD.left}" y1="${lowY.toFixed(1)}"  x2="${W-PAD.right}" y2="${lowY.toFixed(1)}"  stroke="#3B82F6" stroke-width="1" stroke-dasharray="4,3"/>` : ''}
+    <polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/>
     <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top+plotH}" stroke="#9CA3AF" stroke-width="1"/>
     <line x1="${PAD.left}" y1="${PAD.top+plotH}" x2="${W-PAD.right}" y2="${PAD.top+plotH}" stroke="#9CA3AF" stroke-width="1"/>
-    <!-- Y labels -->
     ${yLabels.map(l => `<text x="${PAD.left-4}" y="${(l.y+3).toFixed(1)}" text-anchor="end" font-size="7" fill="#6B7280">${l.label}</text>`).join('')}
-    <!-- X labels -->
     ${xLabels.map(l => `<text x="${l.x.toFixed(1)}" y="${PAD.top+plotH+10}" text-anchor="middle" font-size="7" fill="#6B7280">${l.label}</text>`).join('')}
   </svg>`;
 }
 
-// ── Kumva logo SVG (large, matches header size) ─────────────────────────────
+function buildTempGraph(readings: Reading[], highThreshold: number, lowThreshold: number): string {
+  return buildSvgLine(readings, r => r.temperature, '#22C55E', highThreshold, lowThreshold, '°C');
+}
+
+function buildHumGraph(readings: Reading[]): string {
+  const hasHumidity = readings.some(r => r.humidity != null);
+  if (!hasHumidity) return '';
+  return buildSvgLine(readings, r => r.humidity ?? null, '#06B6D4', undefined, undefined, '%');
+}
+
+// ── Device abbreviation: 3–4 uppercase letters ───────────────────────────────
+function makeAbbrev(name: string, index: number): string {
+  const words = name.trim().split(/\s+/);
+  // Take first letter of each word
+  let abbrev = words.map(w => w[0] ?? '').join('').toUpperCase();
+  // Trim to max 4
+  abbrev = abbrev.substring(0, 4);
+  // If too short, pad with consonants from first word
+  if (abbrev.length < 3) {
+    const extra = (words[0] ?? '').replace(/[aeiouAEIOU\s]/g, '').toUpperCase();
+    abbrev = (abbrev + extra).substring(0, 4);
+  }
+  if (abbrev.length < 3) abbrev = name.replace(/\s+/g,'').substring(0,4).toUpperCase();
+  return abbrev + (index + 1);
+}
+
+// ── Kumva logo SVG (large, matches header size) ───────────────────────────────
 const KUMVA_LOGO_SVG = `<svg width="140" height="56" viewBox="0 0 140 56" xmlns="http://www.w3.org/2000/svg">
   <!-- Circle background -->
   <circle cx="28" cy="28" r="24" fill="#EEF0FB"/>
@@ -152,21 +186,23 @@ function buildFullReportHtml(
   const now = new Date();
   const generatedAt = fmtDT(now.getTime());
   const periodStr   = `${fmtDate(startDate)} 00:00:00 CAT to ${fmtDate(endDate)} 23:59:59 CAT`;
+  const logoHtml    = LOGO_HTML;
 
   // ── Page 1: Cover + Legend ──────────────────────────────────────────────────
   const legendRows = deviceReports.map((dr, i) => {
-    const code = dr.device.name.replace(/\s+/g,'').substring(0,8).toUpperCase();
+    const code = makeAbbrev(dr.device.name, i);
     return `<tr>
-      <td style="font-weight:bold;padding:3px 8px;font-size:10px">${code}</td>
-      <td style="padding:3px 8px;font-size:10px">${dr.device.name} — ${dr.device.category.replace('_',' ')}</td>
+      <td style="font-weight:bold;padding:4px 10px;font-size:10px;white-space:nowrap">${code}</td>
+      <td style="padding:4px 10px;font-size:10px">${dr.device.name} — ${dr.device.category.replace('_',' ')}</td>
     </tr>`;
   }).join('');
 
   // ── Pages 2+: One per device ────────────────────────────────────────────────
-  const devicePages = deviceReports.map(dr => {
+  const devicePages = deviceReports.map((dr, idx) => {
     const { device, readings } = dr;
-    const code = device.name.replace(/\s+/g,'').substring(0,8).toUpperCase();
-    const svgGraph = buildSvgGraph(readings, device.temp_high_threshold, device.temp_low_threshold);
+    const code = makeAbbrev(device.name, idx);
+    const tempGraph = buildTempGraph(readings, device.temp_high_threshold, device.temp_low_threshold);
+    const humGraph  = buildHumGraph(readings);
 
     const tableRows = readings.map((r, i) =>
       `<tr style="background:${i%2===0?'#fff':'#F8F9FF'}">
@@ -180,35 +216,41 @@ function buildFullReportHtml(
       </tr>`
     ).join('');
 
+    const graphLegend = (color: string, label: string, dashed = false) =>
+      `<span style="display:flex;align-items:center;gap:4px">
+        <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="${color}" stroke-width="${dashed ? 1.5 : 2}"${dashed ? ' stroke-dasharray="4,3"' : ''}/></svg>
+        ${label}
+      </span>`;
+
     return `
     <div style="page-break-before:always">
-      <!-- Teal top bar on each page -->
       <div style="background:#0097A7;height:6px;margin:-20px -24px 14px"></div>
-      <p style="font-size:10px;font-weight:bold;margin:0 0 8px;color:#1C1C1E">
+      <p style="font-size:10px;font-weight:bold;margin:0 0 10px;color:#1C1C1E">
         ${code} ${device.name}. Device ID: ${device.mac_address}.
       </p>
-      <div style="border:1px solid #E5E7EB;padding:10px;margin-bottom:10px;background:#fff">
-        ${svgGraph}
-        <!-- Graph legend -->
-        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:9px;color:#6B7280">
-          <span style="display:flex;align-items:center;gap:4px">
-            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#06B6D4" stroke-width="2"/></svg>
-            humidity (${code})
-          </span>
-          <span style="display:flex;align-items:center;gap:4px">
-            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#22C55E" stroke-width="2"/></svg>
-            temperature (${code})
-          </span>
-          <span style="display:flex;align-items:center;gap:4px">
-            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
-            humidity_threshold
-          </span>
-          <span style="display:flex;align-items:center;gap:4px">
-            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
-            temperature_threshold
-          </span>
+
+      <!-- Temperature graph -->
+      <p style="font-size:9px;font-weight:bold;color:#374151;margin:0 0 4px">Temperature (°C)</p>
+      <div style="border:1px solid #E5E7EB;padding:8px;margin-bottom:6px;background:#fff">
+        ${tempGraph}
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:9px;color:#6B7280">
+          ${graphLegend('#22C55E', `temperature (${code})`)}
+          ${graphLegend('#EF4444', 'high threshold', true)}
+          ${graphLegend('#3B82F6', 'low threshold', true)}
         </div>
       </div>
+
+      <!-- Humidity graph -->
+      ${humGraph ? `
+      <p style="font-size:9px;font-weight:bold;color:#374151;margin:0 0 4px">Humidity (%)</p>
+      <div style="border:1px solid #E5E7EB;padding:8px;margin-bottom:10px;background:#fff">
+        ${humGraph}
+        <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:9px;color:#6B7280">
+          ${graphLegend('#06B6D4', `humidity (${code})`)}
+        </div>
+      </div>` : ''}
+
+      <!-- Data table -->
       <table style="width:100%;border-collapse:collapse;font-size:8.5px">
         <thead>
           <tr style="background:#5C6BC0;color:#fff">
@@ -245,36 +287,23 @@ function buildFullReportHtml(
   </style>
 </head>
 <body>
-
-  <!-- Teal top bar -->
   <div class="top-bar"></div>
-
-  <!-- PAGE 1: Cover -->
   <div class="page-header">
-    <!-- Left: placeholder for client logo -->
-    <div style="font-size:18px;font-weight:bold;color:#0097A7;letter-spacing:1px">KUMVA</div>
-    <!-- Right: Kumva Insights logo -->
-    ${KUMVA_LOGO_SVG}
+    ${logoHtml}
+    ${logoHtml}
   </div>
-
   <div class="report-title">${reportTitle}</div>
   <div class="meta">Hour and date: ${generatedAt}</div>
   <div class="meta">Period: ${periodStr}</div>
   <div class="meta">Aggregate: ${aggregateLabel}</div>
-
   <div class="legend-box">
     <div class="legend-title">Legend</div>
     <p style="font-size:10px;color:#6B7280;margin-bottom:10px">Legend.</p>
     <div style="border:1px solid #E5E7EB;padding:14px;display:inline-block;min-width:320px;background:#fff">
-      <table>
-        <tbody>${legendRows}</tbody>
-      </table>
+      <table><tbody>${legendRows}</tbody></table>
     </div>
   </div>
-
-  <!-- PAGES 2+: Per device -->
   ${devicePages}
-
 </body>
 </html>`;
 }
@@ -383,7 +412,7 @@ export async function exportReportExcel(
 }
 
 /**
- * Full multi-sheet Excel report — one sheet per device.
+ * Full single-sheet Excel report — all devices stacked one below another.
  */
 export async function exportFullReportExcel(
   deviceReports: DeviceReport[],
@@ -396,56 +425,126 @@ export async function exportFullReportExcel(
   wb.creator = 'Kumva Insights';
   wb.created = new Date();
 
-  // Cover sheet
-  const cover = wb.addWorksheet('Report Info');
-  cover.getCell('A1').value = 'Kumva Insights Report';
-  cover.getCell('A1').font  = { bold: true, size: 14, color: { argb: 'FF5C6BC0' } };
-  cover.getCell('A2').value = `Category: ${categoryLabel}`;
-  cover.getCell('A3').value = `Period: ${fmtDate(startDate)} to ${fmtDate(endDate)}`;
-  cover.getCell('A4').value = `Aggregate: ${aggregateLabel}`;
-  cover.getCell('A5').value = `Generated: ${fmtDT(Date.now())}`;
-  cover.getCell('A5').font  = { italic: true, color: { argb: 'FF6B7280' } };
-  cover.addRow([]);
-  cover.addRow(['Device Code', 'Device Name', 'Category', 'MAC Address']);
-  cover.getRow(7).font = { bold: true };
-  deviceReports.forEach(dr => {
-    const code = dr.device.name.replace(/\s+/g,'').substring(0,8).toUpperCase();
-    cover.addRow([code, dr.device.name, dr.device.category.replace('_',' '), dr.device.mac_address]);
-  });
-  cover.getColumn('A').width = 14;
-  cover.getColumn('B').width = 28;
-  cover.getColumn('C').width = 16;
-  cover.getColumn('D').width = 20;
+  const sheet = wb.addWorksheet('Report');
 
-  // One sheet per device
-  deviceReports.forEach(dr => {
+  // Column widths
+  sheet.getColumn(1).width = 22; // Date & Time
+  sheet.getColumn(2).width = 16; // Humidity Min
+  sheet.getColumn(3).width = 16; // Humidity Max
+  sheet.getColumn(4).width = 16; // Humidity Mean
+  sheet.getColumn(5).width = 14; // Temp Min
+  sheet.getColumn(6).width = 14; // Temp Max
+  sheet.getColumn(7).width = 14; // Temp Mean
+
+  // ── Logo ──────────────────────────────────────────────────────────────────
+  const logoB64 = getLogoBase64();
+  let currentRow = 1;
+  if (logoB64) {
+    try {
+      const imageId = wb.addImage({ base64: logoB64, extension: 'png' });
+      sheet.addImage(imageId, { tl: { col: 0, row: 0 }, ext: { width: 160, height: 60 } });
+      sheet.getRow(1).height = 20;
+      sheet.getRow(2).height = 20;
+      sheet.getRow(3).height = 20;
+      currentRow = 4;
+    } catch (e) {
+      console.warn('[Export] Could not embed logo in Excel', e);
+    }
+  }
+
+  // ── Report metadata ────────────────────────────────────────────────────────
+  const titleCell = sheet.getCell(`A${currentRow}`);
+  titleCell.value = 'Kumva Insights Report';
+  titleCell.font  = { bold: true, size: 14, color: { argb: 'FF5C6BC0' } };
+  currentRow++;
+
+  sheet.getCell(`A${currentRow}`).value = `Category: ${categoryLabel}   |   Period: ${fmtDate(startDate)} to ${fmtDate(endDate)}   |   Aggregate: ${aggregateLabel}`;
+  sheet.getCell(`A${currentRow}`).font  = { size: 10, color: { argb: 'FF374151' } };
+  currentRow++;
+
+  sheet.getCell(`A${currentRow}`).value = `Generated: ${fmtDT(Date.now())}`;
+  sheet.getCell(`A${currentRow}`).font  = { italic: true, size: 9, color: { argb: 'FF6B7280' } };
+  currentRow += 2; // blank row after metadata
+
+  // ── Legend ─────────────────────────────────────────────────────────────────
+  const legendTitleCell = sheet.getCell(`A${currentRow}`);
+  legendTitleCell.value = 'Legend';
+  legendTitleCell.font  = { bold: true, size: 11 };
+  currentRow++;
+
+  deviceReports.forEach((dr, idx) => {
+    const code = makeAbbrev(dr.device.name, idx);
+    const codeCell = sheet.getCell(`A${currentRow}`);
+    const nameCell = sheet.getCell(`B${currentRow}`);
+    codeCell.value = code;
+    codeCell.font  = { bold: true, size: 10 };
+    nameCell.value = `${dr.device.name} — ${dr.device.category.replace('_', ' ')}`;
+    nameCell.font  = { size: 10 };
+    currentRow++;
+  });
+  currentRow++; // blank row after legend
+
+  // ── Data: all devices stacked ──────────────────────────────────────────────
+  const COL_HEADER_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FF5C6BC0' } };
+  const COL_HEADER_FONT = { bold: true, color: { argb: 'FFFFFFFF' }, size: 9 };
+  const DEVICE_TITLE_FILL = { type: 'pattern' as const, pattern: 'solid' as const, fgColor: { argb: 'FFEEF0FB' } };
+
+  deviceReports.forEach((dr, idx) => {
     const { device, readings } = dr;
-    const sheetName = device.name.substring(0, 31); // Excel sheet name limit
-    const sheet = wb.addWorksheet(sheetName);
-    applyHeader(sheet, [
-      { header: 'Date & Time',      key: 'timestamp',   width: 22 },
-      { header: 'Humidity Min (%)', key: 'hum_min',     width: 16 },
-      { header: 'Humidity Max (%)', key: 'hum_max',     width: 16 },
-      { header: 'Humidity Mean(%)', key: 'hum_mean',    width: 16 },
-      { header: 'Temp Min (°C)',    key: 'temp_min',    width: 14 },
-      { header: 'Temp Max (°C)',    key: 'temp_max',    width: 14 },
-      { header: 'Temp Mean (°C)',   key: 'temp_mean',   width: 14 },
-    ]);
-    readings.forEach(r => {
-      sheet.addRow({
-        timestamp: fmtDT(r.timestamp),
-        hum_min:   r.humidity != null ? +r.humidity.toFixed(2) : null,
-        hum_max:   r.humidity != null ? +r.humidity.toFixed(2) : null,
-        hum_mean:  r.humidity != null ? +r.humidity.toFixed(2) : null,
-        temp_min:  +r.temperature.toFixed(2),
-        temp_max:  +r.temperature.toFixed(2),
-        temp_mean: +r.temperature.toFixed(2),
-      });
+    const code = makeAbbrev(device.name, idx);
+
+    // Device title row
+    const deviceTitleCell = sheet.getCell(`A${currentRow}`);
+    deviceTitleCell.value = `${code}  ${device.name}  —  MAC: ${device.mac_address}  —  Category: ${device.category.replace('_', ' ')}`;
+    deviceTitleCell.font  = { bold: true, size: 10, color: { argb: 'FF1C1C1E' } };
+    deviceTitleCell.fill  = DEVICE_TITLE_FILL;
+    sheet.mergeCells(`A${currentRow}:G${currentRow}`);
+    sheet.getRow(currentRow).height = 16;
+    currentRow++;
+
+    // Column headers
+    const headers = [
+      `Date & Time`,
+      `Humidity ${code} min (%)`,
+      `Humidity ${code} max (%)`,
+      `Humidity ${code} mean (%)`,
+      `Temp ${code} min (°C)`,
+      `Temp ${code} max (°C)`,
+      `Temp ${code} mean (°C)`,
+    ];
+    const headerRow = sheet.getRow(currentRow);
+    headers.forEach((h, ci) => {
+      const cell = headerRow.getCell(ci + 1);
+      cell.value = h;
+      cell.font  = COL_HEADER_FONT;
+      cell.fill  = COL_HEADER_FILL;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     });
+    headerRow.height = 28;
+    currentRow++;
+
+    // Data rows
+    readings.forEach((r, i) => {
+      const dataRow = sheet.getRow(currentRow);
+      dataRow.getCell(1).value = fmtDT(r.timestamp);
+      dataRow.getCell(2).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
+      dataRow.getCell(3).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
+      dataRow.getCell(4).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
+      dataRow.getCell(5).value = +r.temperature.toFixed(2);
+      dataRow.getCell(6).value = +r.temperature.toFixed(2);
+      dataRow.getCell(7).value = +r.temperature.toFixed(2);
+      if (i % 2 === 1) {
+        dataRow.eachCell(cell => {
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F9FF' } };
+        });
+      }
+      currentRow++;
+    });
+
+    currentRow += 2; // blank rows between devices
   });
 
   const rawBuffer = await wb.xlsx.writeBuffer();
-  // React Native doesn't have Buffer global — convert ArrayBuffer to base64 manually
   const uint8 = new Uint8Array(rawBuffer as ArrayBuffer);
   let binary = '';
   for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);

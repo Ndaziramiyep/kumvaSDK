@@ -4,6 +4,7 @@ import { insertIncident, closeIncident, getOpenIncidentForDevice } from '../data
 import { connect, disConnect, readThHistoryData, onThHistoryData, onConnState } from './bluetoothService';
 import { applySecretKey } from './secretKeyService';
 import { setSecretKey } from './bluetoothService';
+import { sendThresholdAlert, sendSyncNotification } from './notificationService';
 import { useAppStore } from '../store/store';
 import { Reading } from '../types/reading';
 
@@ -100,6 +101,14 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
                       min_temperature: r.temperature,
                     });
                     openIncident = await getOpenIncidentForDevice(device.device_id);
+                    // Fire real push notification for the breach
+                    sendThresholdAlert(
+                      (device as any).name ?? device.device_id,
+                      device.device_id,
+                      r.temperature,
+                      device.temp_high_threshold,
+                      device.temp_low_threshold,
+                    ).catch(console.error);
                   } else {
                     // Update max/min temperature if needed
                     const newMax = r.temperature > openIncident.max_temperature ? r.temperature : openIncident.max_temperature;
@@ -130,6 +139,13 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
             if (existing) {
               store.updateDevice({ ...existing, last_sync: syncTime });
             }
+
+            // Notify sync complete
+            sendSyncNotification(
+              (device as any).name ?? device.device_id,
+              device.device_id,
+              readings.length,
+            ).catch(console.error);
           } catch (e) {
             console.error('[AutoSync] persist error', e);
           }
