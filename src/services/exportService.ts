@@ -55,7 +55,7 @@ async function saveFile(cacheUri: string, filename: string, mimeType: string): P
 
 // ── SVG line graph ────────────────────────────────────────────────────────────
 function buildSvgGraph(readings: Reading[], highThreshold: number, lowThreshold: number): string {
-  const W = 580, H = 120, PAD = { top: 10, right: 10, bottom: 30, left: 40 };
+  const W = 580, H = 160, PAD = { top: 14, right: 12, bottom: 36, left: 44 };
   const plotW = W - PAD.left - PAD.right;
   const plotH = H - PAD.top - PAD.bottom;
 
@@ -120,16 +120,19 @@ function buildSvgGraph(readings: Reading[], highThreshold: number, lowThreshold:
   </svg>`;
 }
 
-// ── Kumva logo SVG ────────────────────────────────────────────────────────────
-const KUMVA_LOGO_SVG = `<svg width="80" height="32" viewBox="0 0 80 32" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="16" cy="16" r="14" fill="#5C6BC0" opacity="0.15"/>
-  <text x="16" y="21" text-anchor="middle" font-size="13" font-weight="bold" fill="#5C6BC0">K</text>
-  <text x="36" y="14" font-size="11" font-weight="bold" fill="#1C1C1E">Kumva</text>
-  <text x="36" y="26" font-size="8" fill="#6B7280">Insights</text>
-  <!-- wifi arcs -->
-  <path d="M68 20 Q72 14 76 20" fill="none" stroke="#5C6BC0" stroke-width="1.5"/>
-  <path d="M66 22 Q72 12 78 22" fill="none" stroke="#5C6BC0" stroke-width="1.5" opacity="0.6"/>
-  <circle cx="72" cy="22" r="1.5" fill="#5C6BC0"/>
+// ── Kumva logo SVG (large, matches header size) ─────────────────────────────
+const KUMVA_LOGO_SVG = `<svg width="140" height="56" viewBox="0 0 140 56" xmlns="http://www.w3.org/2000/svg">
+  <!-- Circle background -->
+  <circle cx="28" cy="28" r="24" fill="#EEF0FB"/>
+  <!-- K letter -->
+  <text x="28" y="36" text-anchor="middle" font-size="22" font-weight="bold" fill="#5C6BC0">K</text>
+  <!-- Brand name -->
+  <text x="62" y="24" font-size="18" font-weight="bold" fill="#1C1C1E">Kumva</text>
+  <text x="62" y="42" font-size="12" fill="#6B7280">Insights</text>
+  <!-- Wifi signal arcs -->
+  <path d="M118 36 Q124 26 130 36" fill="none" stroke="#5C6BC0" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M114 40 Q124 22 134 40" fill="none" stroke="#5C6BC0" stroke-width="2.5" stroke-linecap="round" opacity="0.6"/>
+  <circle cx="124" cy="40" r="2.5" fill="#5C6BC0"/>
 </svg>`;
 
 // ── Full HTML report ──────────────────────────────────────────────────────────
@@ -178,29 +181,43 @@ function buildFullReportHtml(
 
     return `
     <div style="page-break-before:always">
-      <p style="font-size:10px;font-weight:bold;margin:0 0 6px">
+      <!-- Teal top bar on each page -->
+      <div style="background:#0097A7;height:6px;margin:-20px -24px 14px"></div>
+      <p style="font-size:10px;font-weight:bold;margin:0 0 8px;color:#1C1C1E">
         ${code} ${device.name}. Device ID: ${device.mac_address}.
       </p>
-      <div style="border:1px solid #E5E7EB;padding:8px;margin-bottom:8px">
+      <div style="border:1px solid #E5E7EB;padding:10px;margin-bottom:10px;background:#fff">
         ${svgGraph}
-        <!-- Legend -->
-        <div style="display:flex;gap:16px;margin-top:6px;font-size:9px;color:#6B7280">
-          <span><span style="display:inline-block;width:20px;height:2px;background:#06B6D4;vertical-align:middle"></span> humidity</span>
-          <span><span style="display:inline-block;width:20px;height:2px;background:#22C55E;vertical-align:middle"></span> temperature</span>
-          <span><span style="display:inline-block;width:20px;height:2px;background:#3B82F6;border-top:1px dashed #3B82F6;vertical-align:middle"></span> humidity_threshold</span>
-          <span><span style="display:inline-block;width:20px;height:2px;background:#EF4444;border-top:1px dashed #EF4444;vertical-align:middle"></span> temperature_threshold</span>
+        <!-- Graph legend -->
+        <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;font-size:9px;color:#6B7280">
+          <span style="display:flex;align-items:center;gap:4px">
+            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#06B6D4" stroke-width="2"/></svg>
+            humidity (${code})
+          </span>
+          <span style="display:flex;align-items:center;gap:4px">
+            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#22C55E" stroke-width="2"/></svg>
+            temperature (${code})
+          </span>
+          <span style="display:flex;align-items:center;gap:4px">
+            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#3B82F6" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+            humidity_threshold
+          </span>
+          <span style="display:flex;align-items:center;gap:4px">
+            <svg width="24" height="8"><line x1="0" y1="4" x2="24" y2="4" stroke="#EF4444" stroke-width="1.5" stroke-dasharray="4,3"/></svg>
+            temperature_threshold
+          </span>
         </div>
       </div>
-      <table style="width:100%;border-collapse:collapse;font-size:9px">
+      <table style="width:100%;border-collapse:collapse;font-size:8.5px">
         <thead>
           <tr style="background:#5C6BC0;color:#fff">
-            <th style="padding:4px 6px;text-align:left">Date</th>
-            <th style="padding:4px 6px">humidity<br/>${code}<br/>min</th>
-            <th style="padding:4px 6px">humidity<br/>${code}<br/>max</th>
-            <th style="padding:4px 6px">humidity<br/>${code}<br/>mean</th>
-            <th style="padding:4px 6px">temperature<br/>${code}<br/>min</th>
-            <th style="padding:4px 6px">temperature<br/>${code}<br/>max</th>
-            <th style="padding:4px 6px">temperature<br/>${code}<br/>mean</th>
+            <th style="padding:5px 6px;text-align:left;min-width:120px">Date</th>
+            <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>min</th>
+            <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>max</th>
+            <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>mean</th>
+            <th style="padding:5px 4px;text-align:center">temperature<br/>${code}<br/>min</th>
+            <th style="padding:5px 4px;text-align:center">temperature<br/>${code}<br/>max</th>
+            <th style="padding:5px 4px;text-align:center">temperature<br/>${code}<br/>mean</th>
           </tr>
         </thead>
         <tbody>${tableRows}</tbody>
@@ -214,22 +231,28 @@ function buildFullReportHtml(
   <meta charset="utf-8"/>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 11px; color: #1C1C1E; padding: 20px; }
-    @page { margin: 15mm; }
-    .page-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #5C6BC0; padding-bottom: 8px; margin-bottom: 12px; }
-    .report-title { text-align: center; font-size: 16px; font-weight: bold; margin: 12px 0 6px; }
-    .meta { font-size: 10px; color: #374151; margin-bottom: 4px; }
-    .legend-box { border: 1px solid #E5E7EB; padding: 12px; margin-top: 12px; }
-    .legend-title { font-weight: bold; text-align: center; margin-bottom: 8px; font-size: 12px; }
+    body { font-family: Arial, sans-serif; font-size: 11px; color: #1C1C1E; padding: 20px 24px; }
+    @page { margin: 12mm 15mm; }
+    .top-bar { background: #0097A7; height: 8px; margin: -20px -24px 16px; }
+    .page-header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid #E5E7EB; }
+    .report-title { text-align: center; font-size: 15px; font-weight: bold; margin: 10px 0 6px; }
+    .meta { font-size: 10px; color: #374151; margin-bottom: 3px; }
+    .legend-box { border: 1px solid #E5E7EB; padding: 14px; margin-top: 14px; background: #FAFBFF; }
+    .legend-title { font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 12px; }
     table { border-collapse: collapse; }
     th, td { text-align: left; }
   </style>
 </head>
 <body>
 
+  <!-- Teal top bar -->
+  <div class="top-bar"></div>
+
   <!-- PAGE 1: Cover -->
   <div class="page-header">
-    <div style="font-size:14px;font-weight:bold;color:#5C6BC0">Kumva Insights</div>
+    <!-- Left: placeholder for client logo -->
+    <div style="font-size:18px;font-weight:bold;color:#0097A7;letter-spacing:1px">KUMVA</div>
+    <!-- Right: Kumva Insights logo -->
     ${KUMVA_LOGO_SVG}
   </div>
 
@@ -239,8 +262,8 @@ function buildFullReportHtml(
 
   <div class="legend-box">
     <div class="legend-title">Legend</div>
-    <p style="font-size:10px;color:#6B7280;margin-bottom:8px">Legend.</p>
-    <div style="border:1px solid #E5E7EB;padding:12px;display:inline-block;min-width:300px">
+    <p style="font-size:10px;color:#6B7280;margin-bottom:10px">Legend.</p>
+    <div style="border:1px solid #E5E7EB;padding:14px;display:inline-block;min-width:320px;background:#fff">
       <table>
         <tbody>${legendRows}</tbody>
       </table>
@@ -346,8 +369,10 @@ export async function exportReportExcel(
   });
   footer.font = { italic: true, color: { argb: 'FF6B7280' } };
 
-  const buffer   = await wb.xlsx.writeBuffer();
-  const base64   = Buffer.from(buffer).toString('base64');
+  const rawBuf = await wb.xlsx.writeBuffer();
+  const u8 = new Uint8Array(rawBuf as ArrayBuffer);
+  let bin = ''; for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  const base64   = btoa(bin);
   const filename = `kumva_report_${ts()}.xlsx`;
   const cacheUri = `${LegacyFS.cacheDirectory}${filename}`;
   await LegacyFS.writeAsStringAsync(cacheUri, base64, { encoding: LegacyFS.EncodingType.Base64 });
@@ -414,8 +439,12 @@ export async function exportFullReportExcel(
     });
   });
 
-  const buffer   = await wb.xlsx.writeBuffer();
-  const base64   = Buffer.from(buffer).toString('base64');
+  const rawBuffer = await wb.xlsx.writeBuffer();
+  // React Native doesn't have Buffer global — convert ArrayBuffer to base64 manually
+  const uint8 = new Uint8Array(rawBuffer as ArrayBuffer);
+  let binary = '';
+  for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+  const base64   = btoa(binary);
   const filename = `kumva_report_${ts()}.xlsx`;
   const cacheUri = `${LegacyFS.cacheDirectory}${filename}`;
   await LegacyFS.writeAsStringAsync(cacheUri, base64, { encoding: LegacyFS.EncodingType.Base64 });
