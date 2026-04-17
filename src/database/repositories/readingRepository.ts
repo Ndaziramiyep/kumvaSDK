@@ -31,6 +31,7 @@ export async function getReadingsByDateRange(
   );
 }
 
+export async function insertReading(reading: Omit<Reading, 'reading_id'>): Promise<void> {
   const db = await getReadyDb();
   if (!db) return;
   await db.runAsync(

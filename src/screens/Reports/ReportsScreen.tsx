@@ -9,7 +9,7 @@ import { useAppStore } from '../../store/store';
 import { DeviceCategory } from '../../types/device';
 import { insertReport } from '../../database/repositories/reportRepository';
 import { getReadingsByDateRange } from '../../database/repositories/readingRepository';
-import { exportReportPdf, exportReportExcel } from '../../services/exportService';
+import { exportFullReportPdf, exportFullReportExcel, DeviceReport } from '../../services/exportService';
 
 type TimeRange = 'Week' | 'Month' | 'Custom';
 
@@ -125,6 +125,7 @@ export default function ReportsScreen() {
   const [loading, setLoading]                 = useState(false);
   const [exporting, setExporting]             = useState(false);
   const [reportRows, setReportRows]           = useState<any[]>([]);
+  const [deviceReports, setDeviceReports]     = useState<DeviceReport[]>([]);
   const [generated, setGenerated]             = useState(false);
 
   const selectedCategoryLabel = CATEGORY_OPTIONS.find(o => o.value === category)?.label ?? 'All Categories';
@@ -138,8 +139,10 @@ export default function ReportsScreen() {
     setLoading(true);
     try {
       const rows: any[] = [];
+      const devReports: DeviceReport[] = [];
       for (const device of filteredDevices) {
         const readings = await getReadingsByDateRange(device.device_id, startDate, endDate);
+        devReports.push({ device, readings });
         readings.forEach(r => rows.push({
           device:      device.name,
           mac:         device.mac_address,
@@ -149,9 +152,9 @@ export default function ReportsScreen() {
           timestamp:   formatDateTime(r.timestamp),
         }));
       }
-      // Sort by timestamp ascending
       rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
       setReportRows(rows);
+      setDeviceReports(devReports);
       setGenerated(true);
 
       await insertReport({
@@ -172,6 +175,7 @@ export default function ReportsScreen() {
   useEffect(() => {
     setGenerated(false);
     setReportRows([]);
+    setDeviceReports([]);
   }, [category, startDate, endDate]);
 
   const applyTimeRange = (range: TimeRange) => {
@@ -184,20 +188,18 @@ export default function ReportsScreen() {
   // ── Export ─────────────────────────────────────────────────────────────────
   const exportAs = async (format: 'PDF' | 'Excel') => {
     if (!generated) await generateReport();
-    if (reportRows.length === 0) {
+    if (deviceReports.length === 0 || deviceReports.every(dr => dr.readings.length === 0)) {
       Alert.alert('No Data', 'No readings found for the selected filters and date range.');
       return;
     }
     setExporting(true);
     try {
-      const start = formatDate(startDate);
-      const end   = formatDate(endDate);
-      const uri   = format === 'PDF'
-        ? await exportReportPdf(reportRows, start, end, selectedCategoryLabel)
-        : await exportReportExcel(reportRows, start, end, selectedCategoryLabel);
+      const uri = format === 'PDF'
+        ? await exportFullReportPdf(deviceReports, startDate, endDate, selectedCategoryLabel)
+        : await exportFullReportExcel(deviceReports, startDate, endDate, selectedCategoryLabel);
       Alert.alert('Export Successful', `Your ${format} report has been saved.\n\n${uri}`, [{ text: 'OK' }]);
-    } catch {
-      Alert.alert('Export Failed', 'Could not export report. Please try again.');
+    } catch (e: any) {
+      Alert.alert('Export Failed', e?.message || 'Could not export report. Please try again.');
     } finally {
       setExporting(false);
     }
@@ -266,57 +268,62 @@ export default function ReportsScreen() {
           </View>
         </View>
 
-        {/* Generate button */}
+        {/* Preview area — tap to generate */}
         <TouchableOpacity
-          style={[styles.generateBtn, loading && { opacity: 0.7 }]}
+          style={[styles.previewBox, loading && { opacity: 0.7 }]}
           onPress={generateReport}
           disabled={loading}
-          activeOpacity={0.85}
+          activeOpacity={0.8}
         >
-          {loading
-            ? <><ActivityIndicator color="#fff" size="small" /><Text style={styles.generateBtnText}>Generating...</Text></>
-            : <><Ionicons name="bar-chart-outline" size={18} color="#fff" /><Text style={styles.generateBtnText}>Generate Report</Text></>
-          }
-        </TouchableOpacity>
-
-        {/* Preview */}
-        {generated && (
-          <View style={styles.previewBox}>
-            {reportRows.length === 0 ? (
-              <View style={styles.emptyPreview}>
-                <Ionicons name="mail-open-outline" size={36} color="#D1D5DB" />
-                <Text style={styles.emptyPreviewText}>
-                  No readings found for{'\n'}{selectedCategoryLabel} · {formatDate(startDate)} → {formatDate(endDate)}
-                </Text>
+          {loading ? (
+            <View style={styles.loadingPreview}>
+              <ActivityIndicator color="#5C6BC0" size="large" />
+              <Text style={styles.loadingText}>Generating report...</Text>
+            </View>
+          ) : !generated ? (
+            <View style={styles.emptyPreview}>
+              <Ionicons name="document-text-outline" size={40} color="#D1D5DB" />
+              <Text style={styles.emptyPreviewTitle}>Tap to generate report</Text>
+              <Text style={styles.emptyPreviewText}>
+                {selectedCategoryLabel} · {formatDate(startDate)} → {formatDate(endDate)}
+              </Text>
+            </View>
+          ) : reportRows.length === 0 ? (
+            <View style={styles.emptyPreview}>
+              <Ionicons name="mail-open-outline" size={36} color="#D1D5DB" />
+              <Text style={styles.emptyPreviewText}>
+                No readings found for{'\n'}{selectedCategoryLabel} · {formatDate(startDate)} → {formatDate(endDate)}
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.previewMeta}>
+                <Text style={styles.previewTitle}>Report Preview</Text>
+                <Text style={styles.previewCount}>{reportRows.length} reading{reportRows.length !== 1 ? 's' : ''}</Text>
+                <Text style={styles.previewRange}>{formatDate(startDate)} → {formatDate(endDate)}</Text>
               </View>
-            ) : (
-              <>
-                <View style={styles.previewMeta}>
-                  <Text style={styles.previewTitle}>Report Preview</Text>
-                  <Text style={styles.previewCount}>{reportRows.length} reading{reportRows.length !== 1 ? 's' : ''}</Text>
-                  <Text style={styles.previewRange}>{formatDate(startDate)} → {formatDate(endDate)}</Text>
-                </View>
 
-                {/* Table header */}
-                <View style={styles.tableHead}>
-                  <Text style={[styles.th, { flex: 2 }]}>Device</Text>
-                  <Text style={[styles.th, { flex: 1.2 }]}>Temp</Text>
-                  <Text style={[styles.th, { flex: 1.2 }]}>Hum</Text>
-                  <Text style={[styles.th, { flex: 2 }]}>Date & Time</Text>
-                </View>
+              <View style={styles.tableHead}>
+                <Text style={[styles.th, { flex: 2 }]}>Device</Text>
+                <Text style={[styles.th, { flex: 1.2 }]}>Temp</Text>
+                <Text style={[styles.th, { flex: 1.2 }]}>Hum</Text>
+                <Text style={[styles.th, { flex: 2 }]}>Date & Time</Text>
+              </View>
 
-                {reportRows.map((row, i) => (
-                  <View key={i} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
-                    <Text style={[styles.td, { flex: 2 }]} numberOfLines={1}>{row.device}</Text>
-                    <Text style={[styles.td, { flex: 1.2 }]}>{row.temperature}°</Text>
-                    <Text style={[styles.td, { flex: 1.2 }]}>{row.humidity !== '--' ? `${row.humidity}%` : '--'}</Text>
-                    <Text style={[styles.td, { flex: 2 }]} numberOfLines={2}>{row.timestamp}</Text>
-                  </View>
-                ))}
-              </>
-            )}
-          </View>
-        )}
+              {reportRows.slice(0, 8).map((row, i) => (
+                <View key={i} style={[styles.tableRow, i % 2 === 0 && styles.tableRowAlt]}>
+                  <Text style={[styles.td, { flex: 2 }]} numberOfLines={1}>{row.device}</Text>
+                  <Text style={[styles.td, { flex: 1.2 }]}>{row.temperature}°</Text>
+                  <Text style={[styles.td, { flex: 1.2 }]}>{row.humidity !== '--' ? `${row.humidity}%` : '--'}</Text>
+                  <Text style={[styles.td, { flex: 2 }]} numberOfLines={2}>{row.timestamp}</Text>
+                </View>
+              ))}
+              {reportRows.length > 8 && (
+                <Text style={styles.moreRows}>+{reportRows.length - 8} more rows</Text>
+              )}
+            </>
+          )}
+        </TouchableOpacity>
 
       </ScrollView>
 
@@ -394,14 +401,22 @@ const styles = StyleSheet.create({
   generateBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#5C6BC0', borderRadius: 14, paddingVertical: 15, shadowColor: '#5C6BC0', shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 5 },
   generateBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
-  previewBox: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB', overflow: 'hidden' },
+  previewBox: {
+    backgroundColor: '#fff', borderRadius: 14,
+    borderWidth: 1.5, borderColor: '#E5E7EB',
+    overflow: 'hidden', minHeight: 120,
+  },
+  loadingPreview:    { padding: 40, alignItems: 'center', gap: 12 },
+  loadingText:       { fontSize: 13, color: '#9CA3AF' },
+  emptyPreviewTitle: { fontSize: 14, fontWeight: '700', color: '#374151' },
   previewMeta: { padding: 16, borderBottomWidth: 1, borderBottomColor: '#F0F2FA' },
   previewTitle: { fontSize: 14, fontWeight: '700', color: '#1C1C1E' },
   previewCount: { fontSize: 24, fontWeight: '800', color: '#5C6BC0', marginTop: 2 },
   previewRange: { fontSize: 12, color: '#9CA3AF', marginTop: 2 },
 
-  emptyPreview: { padding: 32, alignItems: 'center', gap: 12 },
+  emptyPreview: { padding: 32, alignItems: 'center', gap: 10 },
   emptyPreviewText: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', lineHeight: 20 },
+  moreRows: { fontSize: 11, color: '#9CA3AF', textAlign: 'center', padding: 10 },
 
   tableHead: { flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#F8F9FF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
   th: { fontSize: 10, fontWeight: '700', color: '#6B7280', letterSpacing: 0.4 },

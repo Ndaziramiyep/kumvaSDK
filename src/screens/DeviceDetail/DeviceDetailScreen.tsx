@@ -8,7 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../store/store';
 import { getReadingsByDevice, getReadingsLast7Days, insertReadings } from '../../database/repositories/readingRepository';
 import { getIncidentsByDevice } from '../../database/repositories/incidentRepository';
-import { updateDeviceSync } from '../../database/repositories/deviceRepository';
+import { updateDeviceSync, deleteDevice } from '../../database/repositories/deviceRepository';
 import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect, setThAlarmValue, setOpenHistoryDataStore, resetDevice } from '../../services/bluetoothService';
 import { exportPdf } from '../../services/exportService';
 import { useLiveDeviceState } from '../../hooks/useLiveDevice';
@@ -171,8 +171,9 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   const [incidentCount, setIncidentCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
-  const [poweringOff, setPoweringOff] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const updateDeviceStore = useAppStore(s => s.updateDevice);
+  const removeDeviceStore = useAppStore(s => s.removeDevice);
 
   useEffect(() => {
     if (!deviceId) return;
@@ -363,23 +364,24 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
     }
   };
 
-  const handlePowerOff = () => {
+  const handleDelete = () => {
     Alert.alert(
-      'Power Off Device',
-      `Disconnect and power off ${device.name}?`,
+      'Delete Device',
+      `This will permanently delete "${device.name}" and all its readings and incidents. This cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Power Off', style: 'destructive',
+          text: 'Delete', style: 'destructive',
           onPress: async () => {
-            setPoweringOff(true);
+            setDeleting(true);
             try {
               disConnect(device.mac_address);
-              Alert.alert('Powered Off', `${device.name} has been disconnected.`);
+              await deleteDevice(device.device_id);
+              removeDeviceStore(device.device_id);
+              navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
             } catch (e: any) {
-              Alert.alert('Error', e?.message || 'Could not power off device.');
-            } finally {
-              setPoweringOff(false);
+              Alert.alert('Error', e?.message || 'Could not delete device.');
+              setDeleting(false);
             }
           },
         },
@@ -589,13 +591,13 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
             <Text style={styles.controlBtnOutlineText}>Reconfigure</Text>
           </TouchableOpacity>
 
-          {/* Power Off */}
+          {/* Delete Device */}
           <TouchableOpacity
-            style={[styles.controlBtn, styles.controlBtnWarning, poweringOff && { opacity: 0.7 }]}
-            onPress={handlePowerOff} disabled={poweringOff} activeOpacity={0.85}
+            style={[styles.controlBtn, styles.controlBtnDanger, deleting && { opacity: 0.7 }]}
+            onPress={handleDelete} disabled={deleting} activeOpacity={0.85}
           >
-            <Ionicons name="power-outline" size={20} color="#fff" />
-            <Text style={styles.controlBtnText}>{poweringOff ? 'Powering Off...' : 'Power Off'}</Text>
+            <Ionicons name="trash-outline" size={20} color="#fff" />
+            <Text style={styles.controlBtnText}>{deleting ? 'Deleting...' : 'Delete Device'}</Text>
           </TouchableOpacity>
 
           {/* Reset */}
@@ -679,11 +681,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#5C6BC0',
   },
   controlBtnOutlineText: { color: '#5C6BC0', fontSize: 14, fontWeight: '700' },
-  controlBtnWarning: {
-    backgroundColor: '#F59E0B',
-    shadowColor: '#F59E0B', shadowOpacity: 0.35, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 }, elevation: 5,
-  },
   controlBtnDanger: {
     backgroundColor: '#EF4444',
     shadowColor: '#EF4444', shadowOpacity: 0.35, shadowRadius: 8,
