@@ -172,7 +172,9 @@ const KUMVA_LOGO_SVG = `<svg width="140" height="56" viewBox="0 0 140 56" xmlns=
 // ── Full HTML report ──────────────────────────────────────────────────────────
 export interface DeviceReport {
   device: Device;
-  readings: Reading[];
+  readings: Reading[];      // aggregated (one per bucket) — used for graphs
+  rawReadings: Reading[];   // all raw readings in range — used for min/max/mean
+  intervalMs: number;       // bucket size in ms
 }
 
 function buildFullReportHtml(
@@ -204,17 +206,35 @@ function buildFullReportHtml(
     const tempGraph = buildTempGraph(readings, device.temp_high_threshold, device.temp_low_threshold);
     const humGraph  = buildHumGraph(readings);
 
-    const tableRows = readings.map((r, i) =>
-      `<tr style="background:${i%2===0?'#fff':'#F8F9FF'}">
-        <td>${fmtDT(r.timestamp)}</td>
-        <td>${r.humidity != null ? r.humidity.toFixed(2) : '--'}</td>
-        <td>${r.humidity != null ? r.humidity.toFixed(2) : '--'}</td>
-        <td>${r.humidity != null ? r.humidity.toFixed(2) : '--'}</td>
-        <td>${r.temperature.toFixed(2)}</td>
-        <td>${device.temp_low_threshold.toFixed(2)}</td>
-        <td>${device.temp_high_threshold.toFixed(2)}</td>
-      </tr>`
-    ).join('');
+    // Group RAW readings by bucket to get accurate min/max/mean per interval
+    const buckets = new Map<number, Reading[]>();
+    dr.rawReadings.forEach(r => {
+      const key = Math.floor(r.timestamp / dr.intervalMs) * dr.intervalMs;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key)!.push(r);
+    });
+    // Sort buckets chronologically
+    const sortedBuckets = Array.from(buckets.entries()).sort(([a], [b]) => a - b);
+
+    const tableRows = sortedBuckets.map(([bucketTs, recs], i) => {
+      const temps = recs.map(r => r.temperature);
+      const hums  = recs.map(r => r.humidity).filter((h): h is number => h != null);
+      const tMin  = Math.min(...temps).toFixed(2);
+      const tMax  = Math.max(...temps).toFixed(2);
+      const tMean = (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(2);
+      const hMin  = hums.length ? Math.min(...hums).toFixed(2) : '--';
+      const hMax  = hums.length ? Math.max(...hums).toFixed(2) : '--';
+      const hMean = hums.length ? (hums.reduce((a, b) => a + b, 0) / hums.length).toFixed(2) : '--';
+      return `<tr style="background:${i%2===0?'#fff':'#F8F9FF'}">
+        <td style="padding:4px 6px;text-align:left">${fmtDT(bucketTs)}</td>
+        <td style="padding:4px 4px;text-align:center">${hMin}</td>
+        <td style="padding:4px 4px;text-align:center">${hMax}</td>
+        <td style="padding:4px 4px;text-align:center">${hMean}</td>
+        <td style="padding:4px 4px;text-align:center">${tMin}</td>
+        <td style="padding:4px 4px;text-align:center">${tMax}</td>
+        <td style="padding:4px 4px;text-align:center">${tMean}</td>
+      </tr>`;
+    }).join('');
 
     const graphLegend = (color: string, label: string, dashed = false) =>
       `<span style="display:flex;align-items:center;gap:4px">
@@ -251,10 +271,19 @@ function buildFullReportHtml(
       </div>` : ''}
 
       <!-- Data table -->
-      <table style="width:100%;border-collapse:collapse;font-size:8.5px">
+      <table style="width:100%;border-collapse:collapse;font-size:8.5px;table-layout:fixed">
+        <colgroup>
+          <col style="width:22%"/>
+          <col style="width:13%"/>
+          <col style="width:13%"/>
+          <col style="width:13%"/>
+          <col style="width:13%"/>
+          <col style="width:13%"/>
+          <col style="width:13%"/>
+        </colgroup>
         <thead>
           <tr style="background:#5C6BC0;color:#fff">
-            <th style="padding:5px 6px;text-align:left;min-width:120px">Date</th>
+            <th style="padding:5px 6px;text-align:left">Date</th>
             <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>min</th>
             <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>max</th>
             <th style="padding:5px 4px;text-align:center">humidity<br/>${code}<br/>mean</th>
@@ -289,7 +318,6 @@ function buildFullReportHtml(
 <body>
   <div class="top-bar"></div>
   <div class="page-header">
-    ${logoHtml}
     ${logoHtml}
   </div>
   <div class="report-title">${reportTitle}</div>
@@ -523,16 +551,24 @@ export async function exportFullReportExcel(
     headerRow.height = 28;
     currentRow++;
 
-    // Data rows
-    readings.forEach((r, i) => {
+    // Data rows — group RAW readings by bucket to get accurate min/max/mean
+    const xlBuckets = new Map<number, Reading[]>();
+    dr.rawReadings.forEach(r => {
+      const key = Math.floor(r.timestamp / dr.intervalMs) * dr.intervalMs;
+      if (!xlBuckets.has(key)) xlBuckets.set(key, []);
+      xlBuckets.get(key)!.push(r);
+    });
+    Array.from(xlBuckets.entries()).sort(([a], [b]) => a - b).forEach(([bucketTs, recs], i) => {
+      const temps = recs.map(r => r.temperature);
+      const hums  = recs.map(r => r.humidity).filter((h): h is number => h != null);
       const dataRow = sheet.getRow(currentRow);
-      dataRow.getCell(1).value = fmtDT(r.timestamp);
-      dataRow.getCell(2).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
-      dataRow.getCell(3).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
-      dataRow.getCell(4).value = r.humidity != null ? +r.humidity.toFixed(2) : null;
-      dataRow.getCell(5).value = +r.temperature.toFixed(2);
-      dataRow.getCell(6).value = +r.temperature.toFixed(2);
-      dataRow.getCell(7).value = +r.temperature.toFixed(2);
+      dataRow.getCell(1).value = fmtDT(bucketTs);
+      dataRow.getCell(2).value = hums.length ? +(Math.min(...hums).toFixed(2)) : null;
+      dataRow.getCell(3).value = hums.length ? +(Math.max(...hums).toFixed(2)) : null;
+      dataRow.getCell(4).value = hums.length ? +(hums.reduce((a, b) => a + b, 0) / hums.length).toFixed(2) : null;
+      dataRow.getCell(5).value = +(Math.min(...temps).toFixed(2));
+      dataRow.getCell(6).value = +(Math.max(...temps).toFixed(2));
+      dataRow.getCell(7).value = +(temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(2);
       if (i % 2 === 1) {
         dataRow.eachCell(cell => {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8F9FF' } };

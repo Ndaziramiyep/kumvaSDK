@@ -14,6 +14,7 @@ import { Device, DeviceCategory } from '../../types/device';
 import { Reading } from '../../types/reading';
 import { useLiveDeviceStates } from '../../hooks/useLiveDevice';
 import { normalizeMacAddress } from '../../services/liveDeviceService';
+import { useAppStore } from '../../store/store';
 
 const GRAPH_H = 140;
 const Y_W = 28;
@@ -30,8 +31,8 @@ const LINE_COLORS = ['#5C6BC0', '#06B6D4', '#F59E0B', '#22C55E', '#EF4444', '#A8
 // Always returns exactly 7 slots (one per day), null if no data that day
 function getDailyAvgs(readings: Reading[]): (number | null)[] {
   const now = Date.now();
-  return Array.from({ length: 7 }, (_, i) => {
-    const dayStart = now - (6 - i) * 86400000;
+  return Array.from({ length: 6 }, (_, i) => {
+    const dayStart = now - (7 - i) * 86400000;
     const dayEnd   = dayStart + 86400000;
     const vals = readings
       .filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd)
@@ -50,15 +51,15 @@ function CategoryGraph({
   const [plotWidth, setPlotWidth] = useState(0);
 
   const now = Date.now();
-  // X-axis: always 7 evenly-spaced day labels
-  const xLabels = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(now - (6 - i) * 86400000);
+  // X-axis: 6 days, yesterday back to 6 days ago (today excluded)
+  const xLabels = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now - (7 - i) * 86400000);
     return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
   });
 
   const seriesData = devices.map((d, idx) => ({
     device: d,
-    slots: getDailyAvgs(readingsMap[d.device_id] ?? []), // 7 slots, null = no data
+    slots: getDailyAvgs(readingsMap[d.device_id] ?? []), // 6 slots, null = no data
     color: LINE_COLORS[idx % LINE_COLORS.length],
   }));
 
@@ -90,7 +91,7 @@ function CategoryGraph({
   const range = maxV - minV || 1;
   const toY = (v: number) => GRAPH_H - ((v - minV) / range) * GRAPH_H;
   // X: evenly spaced — slot i maps to fraction i/6 of plotWidth
-  const toX = (i: number, w: number) => (i / 6) * w;
+  const toX = (i: number, w: number) => (i / 5) * w;
 
   const yStep = (maxV - minV) / 4;
   const yLabels = Array.from({ length: 5 }, (_, i) => Math.round(maxV - i * yStep));
@@ -134,7 +135,7 @@ function CategoryGraph({
                   {seriesData.map(s => {
                     // Draw segments only between consecutive non-null slots
                     const segments: JSX.Element[] = [];
-                    for (let i = 0; i < 6; i++) {
+                    for (let i = 0; i < 5; i++) {
                       const v1 = s.slots[i]; const v2 = s.slots[i + 1];
                       if (v1 === null || v2 === null) continue;
                       const x1 = toX(i, plotWidth);     const y1 = toY(v1);
@@ -293,6 +294,7 @@ function CategorySection({
   const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
   const fadeAnim  = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(28)).current;
+  const lastSyncedAt = useAppStore(s => s.lastSyncedAt);
 
   useEffect(() => {
     Animated.parallel([
@@ -310,7 +312,7 @@ function CategorySection({
         .then(cnt => setIncidentCounts(prev => ({ ...prev, [d.device_id]: cnt })))
         .catch(console.error);
     });
-  }, [devices]);
+  }, [devices, lastSyncedAt]);
 
   const label = category === 'cold_room' ? 'COLD ROOM'
     : category === 'general' ? 'GENERAL AREA'
@@ -523,11 +525,6 @@ const ms = StyleSheet.create({
   },
   topLeft:  { flexDirection: 'row', alignItems: 'center' },
   logo:     { width: 44, height: 44 },
-  appTitle: {
-    position: 'absolute', left: 0, right: 0,
-    textAlign: 'center',
-    fontSize: 18, fontWeight: '800', color: '#1C1C1E', letterSpacing: 0.2,
-  },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 'auto' },
   addBtn:   {
     width: 38, height: 38, borderRadius: 12,

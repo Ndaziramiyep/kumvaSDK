@@ -139,6 +139,7 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
             if (existing) {
               store.updateDevice({ ...existing, last_sync: syncTime });
             }
+            store.setLastSyncedAt(syncTime);
 
             // Notify sync complete
             sendSyncNotification(

@@ -178,7 +178,7 @@ export default function ReportsScreen() {
       for (const device of filteredDevices) {
         const rawReadings = await getReadingsByDateRange(device.device_id, startDate, endDate);
         const readings    = aggregateReadings(rawReadings, aggregateIntervalMs);
-        devReports.push({ device, readings });
+        devReports.push({ device, readings, rawReadings, intervalMs: aggregateIntervalMs });
         readings.forEach(r => rows.push({
           device:      device.name,
           mac:         device.mac_address,
@@ -437,8 +437,9 @@ export default function ReportsScreen() {
 
 const styles = StyleSheet.create({
   safe:        { flex: 1, backgroundColor: '#F4F6FB' },
-  header:      { paddingVertical: 14, paddingHorizontal: 20, backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0E0E0', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1C1C1E' },
+  header:      { paddingVertical: 10, paddingHorizontal: 16, backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0E0E0', flexDirection: 'row', alignItems: 'center' },
+  headerLogo:  { width: 44, height: 44 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1C1C1E', marginLeft: 10 },
   body:        { padding: 20, gap: 14, paddingBottom: 24 },
 
   label: { fontSize: 13, fontWeight: '600', color: '#374151' },
