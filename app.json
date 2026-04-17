@@ -7,9 +7,9 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/Kumva-New-Logo-D.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#EEF1F8"
     },
     "assetBundlePatterns": [
       "**/*"
@@ -22,7 +22,13 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.ndaziramiye.sdkapp"
+      "package": "com.ndaziramiye.sdkapp",
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -31,6 +37,9 @@
       "eas": {
         "projectId": "0051db78-027a-44c6-9f54-6becb44c0371"
       }
-    }
+    },
+    "plugins": [
+      "expo-sharing"
+    ]
   }
 }

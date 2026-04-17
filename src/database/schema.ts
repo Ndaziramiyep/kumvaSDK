@@ -8,6 +8,7 @@ export const CREATE_DEVICES_TABLE = `
     temp_high_threshold REAL NOT NULL DEFAULT 0,
     battery_level INTEGER,
     last_sync INTEGER,
+    secret_key TEXT,
     created_at INTEGER NOT NULL
   );
 `;
@@ -27,9 +28,12 @@ export const CREATE_INCIDENTS_TABLE = `
   CREATE TABLE IF NOT EXISTS incidents (
     incident_id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
+    device_name TEXT NOT NULL DEFAULT '',
+    device_category TEXT NOT NULL DEFAULT '',
     start_time INTEGER NOT NULL,
     end_time INTEGER,
     max_temperature REAL NOT NULL,
+    min_temperature REAL,
     FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
   );
 `;

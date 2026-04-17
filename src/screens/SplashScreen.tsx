@@ -25,7 +25,7 @@ export default function SplashScreen({ onFinish }: Props) {
 
   return (
     <View style={styles.container}>
-      <Animated.View style={{ opacity, transform: [{ scale }] }}>
+      <Animated.View style={[styles.logoWrap, { opacity, transform: [{ scale }] }]}>
         <Image
           source={require('../../assets/Kumva-New-Logo-D.png')}
           style={styles.logo}
@@ -43,5 +43,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logo: { width: 220, height: 160 },
+  logoWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logo: { width: 260, height: 180 },
 });

@@ -6,8 +6,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { insertDevice, getAllDevices, updateDevice } from '../../database/repositories/deviceRepository';
+import { getReadyDb } from '../../database/db';
 import { useAppStore } from '../../store/store';
 import { Device, DeviceCategory } from '../../types/device';
+import { syncSingleDevice } from '../../services/autoSyncService';
+import { saveSecretKey, getSecretKey } from '../../services/secretKeyService';
+import { connect, disConnect, onConnState } from '../../services/bluetoothService';
 
 const CATEGORIES: { label: string; value: DeviceCategory }[] = [
   { label: 'Freezer', value: 'freezer' },
@@ -50,7 +54,10 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
   const deviceId: string | undefined = route.params?.deviceId;
 
   const initialCategory = (scanned?.category as DeviceCategory) ?? 'freezer';
-  const [name, setName] = useState(scanned?.name ?? '');
+  const [name, setName] = useState(
+    isReconfigure && existingDevice ? existingDevice.name : (scanned?.name ?? '')
+  );
+  const sensorName = scanned?.name ?? ''; // original BLE-broadcast name
   const [macAddress, setMacAddress] = useState(scanned?.macAddress ?? '');
   const [category, setCategory] = useState<DeviceCategory>(initialCategory);
   const existingDevice = existingDevices.find(d => d.device_id === deviceId);
@@ -62,6 +69,10 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
   );
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [secretKey, setSecretKey] = useState(
+    isReconfigure && existingDevice?.secret_key ? existingDevice.secret_key : getSecretKey
+  );
+  const [keyVisible, setKeyVisible] = useState(false);
 
   const handleSave = async () => {
     if (saving) return;
@@ -73,6 +84,11 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
     const trimmedMac = macAddress.trim().toUpperCase();
     if (!trimmedMac) {
       Alert.alert('MAC Address Required', 'Please enter the device MAC address.');
+      return;
+    }
+    const trimmedKey = secretKey.trim();
+    if (!trimmedKey) {
+      Alert.alert('Secret Key Required', 'Please enter the device secret key to authenticate.');
       return;
     }
 
@@ -102,36 +118,64 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
           category,
           temp_low_threshold: Number(lowThreshold),
           temp_high_threshold: Number(highThreshold),
+          secret_key: trimmedKey,
         };
         await updateDevice(updated);
         updateDeviceStore(updated);
+        await saveSecretKey(trimmedKey);
+        // Propagate new name to incidents table
+        try {
+          const db = await getReadyDb();
+          await db.runAsync(
+            'UPDATE incidents SET device_name = ? WHERE device_id = ?',
+            trimmedName, existingDevice.device_id
+          );
+        } catch (_) {}
         navigation.goBack();
         return;
       }
 
-      // Check duplicate in Zustand store (in-session, works on web + native)
+      // Check duplicate in Zustand store
       const duplicateInStore = existingDevices.find(
         d => d.mac_address.toUpperCase() === trimmedMac
       );
       if (duplicateInStore) {
-        Alert.alert(
-          'Device Already Registered',
-          `MAC address ${trimmedMac} is already registered as "${duplicateInStore.name}".`
-        );
+        Alert.alert('Device Already Registered', `MAC address ${trimmedMac} is already registered as "${duplicateInStore.name}".`);
         setSaving(false);
         return;
       }
 
-      // Check duplicate in DB (native — catches previous sessions)
+      // Check duplicate in DB
       const dbDevices = await getAllDevices();
-      const duplicateInDb = dbDevices.find(
-        d => d.mac_address.toUpperCase() === trimmedMac
-      );
+      const duplicateInDb = dbDevices.find(d => d.mac_address.toUpperCase() === trimmedMac);
       if (duplicateInDb) {
-        Alert.alert(
-          'Device Already Registered',
-          `MAC address ${trimmedMac} is already registered as "${duplicateInDb.name}".`
-        );
+        Alert.alert('Device Already Registered', `MAC address ${trimmedMac} is already registered as "${duplicateInDb.name}".`);
+        setSaving(false);
+        return;
+      }
+
+      // ── Validate secret key by attempting a real BLE connection ──────────
+      await saveSecretKey(trimmedKey);
+      const keyValid = await new Promise<boolean>(resolve => {
+        let sub: any;
+        const timer = setTimeout(() => { sub?.remove?.(); resolve(false); }, 20000);
+        sub = onConnState((event: any) => {
+          if ((event?.mac ?? '').toUpperCase() !== trimmedMac) return;
+          if (event.state === 'connected_complete') {
+            clearTimeout(timer); sub?.remove?.();
+            disConnect(trimmedMac);
+            resolve(true);
+          } else if (event.state === 'password_error') {
+            clearTimeout(timer); sub?.remove?.();
+            disConnect(trimmedMac);
+            resolve(false);
+          }
+        });
+        connect(trimmedMac);
+      });
+
+      if (!keyValid) {
+        Alert.alert('Invalid Secret Key', 'The secret key does not match this device. Please check and try again.');
         setSaving(false);
         return;
       }
@@ -145,15 +189,20 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
         temp_high_threshold: Number(highThreshold),
         battery_level: null,
         last_sync: null,
+        secret_key: trimmedKey,
         created_at: Date.now(),
       };
 
       await insertDevice(device);
       addDevice(device);
+
+      // Kick off an immediate background sync
+      syncSingleDevice(device).catch(console.error);
+
       navigation.reset({ index: 0, routes: [{ name: 'Main' }] });
     } catch (e: any) {
       if (e?.message === 'DUPLICATE_MAC') {
-        Alert.alert('Device Already Registered', `MAC address ${trimmedMac} is already in use.`);
+        Alert.alert('Device Already Registered', `MAC address ${macAddress.trim().toUpperCase()} is already in use.`);
       } else {
         Alert.alert('Error', 'Failed to save device. Please try again.');
       }
@@ -190,6 +239,12 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
           value={name}
           onChangeText={setName}
         />
+        {sensorName ? (
+          <View style={styles.sensorNameHint}>
+            <Ionicons name="bluetooth-outline" size={13} color="#5C6BC0" />
+            <Text style={styles.sensorNameHintText}>Sensor broadcasts as: <Text style={styles.sensorNameHintBold}>{sensorName}</Text></Text>
+          </View>
+        ) : null}
 
         <Text style={styles.label}>MAC ADDRESS</Text>
         <TextInput
@@ -201,6 +256,23 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
           autoCapitalize="characters"
           editable={!scanned?.macAddress}
         />
+
+        <Text style={styles.label}>SECRET KEY</Text>
+        <View style={styles.secretRow}>
+          <TextInput
+            style={[styles.input, { flex: 1 }]}
+            placeholder="Enter device secret key"
+            placeholderTextColor="#B0B8C8"
+            value={secretKey}
+            onChangeText={setSecretKey}
+            secureTextEntry={!keyVisible}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          <TouchableOpacity style={styles.eyeBtn} onPress={() => setKeyVisible(v => !v)}>
+            <Ionicons name={keyVisible ? 'eye-off-outline' : 'eye-outline'} size={20} color="#9CA3AF" />
+          </TouchableOpacity>
+        </View>
 
         <Text style={styles.label}>CATEGORY</Text>
         <TouchableOpacity
@@ -277,8 +349,8 @@ export default function DeviceConfigScreen({ navigation, route }: any) {
 
         <TouchableOpacity style={[styles.saveBtn, saving && styles.saveBtnDisabled]} onPress={handleSave} activeOpacity={0.85} disabled={saving}>
           {saving
-            ? <ActivityIndicator color="#fff" />
-            : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={styles.saveBtnText}>Save Device</Text></>}
+            ? <><ActivityIndicator color="#fff" /><Text style={styles.saveBtnText}>Verifying key...</Text></>
+            : <><Ionicons name="save-outline" size={18} color="#fff" /><Text style={styles.saveBtnText}>Verify & Save Device</Text></>}
         </TouchableOpacity>
 
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.cancelBtn}>
@@ -318,6 +390,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, height: 50, fontSize: 15, color: '#1C1C1E',
   },
   inputReadonly: { backgroundColor: '#F4F6FB', color: '#9CA3AF' },
+  sensorNameHint: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: '#EEF0FB', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6,
+    marginTop: -4,
+  },
+  sensorNameHintText: { fontSize: 12, color: '#5C6BC0' },
+  sensorNameHintBold: { fontWeight: '700' },
+  secretRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  eyeBtn: {
+    width: 50, height: 50, borderRadius: 10, backgroundColor: '#fff',
+    borderWidth: 1, borderColor: '#E5E7EB',
+    alignItems: 'center', justifyContent: 'center',
+  },
   select: {
     backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB',
     paddingHorizontal: 14, height: 50, flexDirection: 'row',

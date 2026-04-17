@@ -6,13 +6,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../store/store';
-import { getReadingsByDevice, insertReadings } from '../../database/repositories/readingRepository';
+import { getReadingsByDevice, getReadingsLast7Days, insertReadings } from '../../database/repositories/readingRepository';
 import { getIncidentsByDevice } from '../../database/repositories/incidentRepository';
 import { updateDeviceSync } from '../../database/repositories/deviceRepository';
 import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect, setThAlarmValue, setOpenHistoryDataStore, resetDevice } from '../../services/bluetoothService';
 import { exportPdf } from '../../services/exportService';
 import { useLiveDeviceState } from '../../hooks/useLiveDevice';
 import { Reading } from '../../types/reading';
+import { applySecretKey } from '../../services/secretKeyService';
 
 const GRAPH_H = 110;
 
@@ -28,13 +29,14 @@ function avg(vals: number[]): number {
 
 // ── Line graph ────────────────────────────────────────────────────────────────
 function LineGraph({
-  data, color, highThreshold, lowThreshold, unit,
+  data, color, highThreshold, lowThreshold, unit, xLabels: customXLabels,
 }: {
   data: number[];
   color: string;
   highThreshold?: number;
   lowThreshold?: number;
   unit: string;
+  xLabels?: string[];
 }) {
   const [plotWidth, setPlotWidth] = useState(0);
 
@@ -60,9 +62,9 @@ function LineGraph({
   );
 
   const Y_AXIS_W = 36;
-  const xLabels = Array.from({ length: 7 }, (_, i) => {
+  const xLabels = customXLabels ?? Array.from({ length: data.length }, (_, i) => {
     const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
+    d.setDate(d.getDate() - (data.length - 1 - i));
     return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
   });
 
@@ -165,6 +167,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   const liveState = useLiveDeviceState(device?.mac_address);
 
   const [readings, setReadings] = useState<Reading[]>([]);
+  const [recent7, setRecent7] = useState<Reading[]>([]);
   const [incidentCount, setIncidentCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -174,6 +177,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   useEffect(() => {
     if (!deviceId) return;
     getReadingsByDevice(deviceId, 500).then(setReadings).catch(console.error);
+    getReadingsLast7Days(deviceId).then(setRecent7).catch(console.error);
     getIncidentsByDevice(deviceId).then(r => setIncidentCount(r.length)).catch(console.error);
   }, [deviceId]);
 
@@ -199,42 +203,38 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   const currentHumidity = liveState?.humidity ?? null;
   const currentBattery = liveState?.battery ?? device.battery_level;
 
-  // Build daily averages for graphs (7 buckets)
+  // Build daily averages — always 7 slots, null = no data that day
   const now = Date.now();
-  const tempByDay = Array.from({ length: 7 }, (_, i) => {
-    const dayStart = now - (6 - i) * 86400000;
-    const dayEnd = dayStart + 86400000;
-    const vals = recent
-      .filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd)
-      .map(r => r.temperature);
-    return vals.length ? avg(vals) : null;
-  });
-
-  const humByDay = Array.from({ length: 7 }, (_, i) => {
-    const dayStart = now - (6 - i) * 86400000;
-    const dayEnd = dayStart + 86400000;
-    const vals = recent
-      .filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd)
-      .map(r => r.humidity)
-      .filter((v): v is number => v != null);
-    return vals.length ? avg(vals) : null;
-  });
-
-  // Fill nulls with interpolation for display
-  const fillNulls = (arr: (number | null)[]): number[] => {
-    const filled = [...arr];
-    for (let i = 0; i < filled.length; i++) {
-      if (filled[i] === null) filled[i] = filled[i - 1] ?? filled[i + 1] ?? 0;
-    }
-    return filled as number[];
+  const buildDailyPoints = (key: 'temperature' | 'humidity') => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const dayStart = now - (6 - i) * 86400000;
+      const dayEnd   = dayStart + 86400000;
+      const dayVals = recent7
+        .filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd)
+        .map(r => key === 'temperature' ? r.temperature : r.humidity)
+        .filter((v): v is number => v != null);
+      return dayVals.length ? dayVals.reduce((a, b) => a + b, 0) / dayVals.length : null;
+    });
   };
 
-  const tempData = fillNulls(tempByDay);
-  const humData = fillNulls(humByDay);
+  const tempSlots = buildDailyPoints('temperature'); // 7 slots, null = no data
+  const humSlots  = buildDailyPoints('humidity');
 
-  const avgTemp = recent.length ? avg(recent.map(r => r.temperature)) : null;
-  const avgHum = recent.length
-    ? avg(recent.map(r => r.humidity).filter((v): v is number => v != null))
+  // For LineGraph: only pass non-null values with their labels
+  const tempPoints = tempSlots.map((v, i) => ({ val: v, i })).filter(p => p.val !== null) as { val: number; i: number }[];
+  const humPoints  = humSlots.map((v, i) => ({ val: v, i })).filter(p => p.val !== null) as { val: number; i: number }[];
+  const tempData   = tempPoints.map(p => p.val);
+  const humData    = humPoints.map(p => p.val);
+  const allXLabels = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now - (6 - i) * 86400000);
+    return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
+  });
+  const tempXLabels = tempPoints.map(p => allXLabels[p.i]);
+  const humXLabels  = humPoints.map(p => allXLabels[p.i]);
+
+  const avgTemp = recent7.length ? avg(recent7.map(r => r.temperature)) : null;
+  const avgHum = recent7.length
+    ? avg(recent7.map(r => r.humidity).filter((v): v is number => v != null))
     : null;
 
   // Last sync in minutes
@@ -259,6 +259,14 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
     };
 
     try {
+      // Apply this device's secret key before connecting
+      if (device.secret_key) {
+        const { setSecretKey } = await import('../../services/bluetoothService');
+        setSecretKey(device.secret_key);
+      } else {
+        applySecretKey();
+      }
+
       // Step 1: connect and wait for connected_complete
       await new Promise<void>((resolve, reject) => {
         connTimer = setTimeout(() => reject(new Error('Connection timed out')), 25000);
@@ -339,6 +347,10 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
 
       const fresh = await getReadingsByDevice(deviceId, 500);
       setReadings(fresh);
+      const fresh7 = await getReadingsLast7Days(deviceId);
+      setRecent7(fresh7);
+      const freshIncidents = await getIncidentsByDevice(deviceId);
+      setIncidentCount(freshIncidents.length);
       Alert.alert('Sync Complete', readingsToInsert.length > 0
         ? `Saved ${readingsToInsert.length} readings.`
         : 'No new history data from device.');
@@ -388,6 +400,13 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
             let connSub: any;
             let connTimer: any;
             try {
+              // Apply this device's secret key before connecting
+              if (device.secret_key) {
+                const { setSecretKey } = await import('../../services/bluetoothService');
+                setSecretKey(device.secret_key);
+              } else {
+                applySecretKey();
+              }
               await new Promise<void>((resolve, reject) => {
                 connTimer = setTimeout(() => reject(new Error('Connection timed out')), 20000);
                 connSub = onConnState((event: any) => {
@@ -471,6 +490,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
             highThreshold={device.temp_high_threshold}
             lowThreshold={device.temp_low_threshold}
             unit="°C"
+            xLabels={tempXLabels}
           />
           {/* Table for temperature */}
           <View style={{marginTop: 12}}>
@@ -481,22 +501,17 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
               <Text style={styles.tableHeader}>Max</Text>
               <Text style={styles.tableHeader}>Count</Text>
             </View>
-            {Array.from({length: 7}, (_, i) => {
-              const d = new Date();
-              d.setDate(d.getDate() - (6 - i));
-              const dayStart = d.setHours(0,0,0,0);
+            {tempPoints.map((p, i) => {
+              const d = new Date(now - (6 - p.i) * 86400000);
+              const dayStart = now - (6 - p.i) * 86400000;
               const dayEnd = dayStart + 86400000;
-              const vals = recent.filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd).map(r => r.temperature).filter((v): v is number => v != null);
-              const avgV = vals.length ? avg(vals) : null;
-              const minV = vals.length ? Math.min(...vals) : null;
-              const maxV = vals.length ? Math.max(...vals) : null;
-              const dateLabel = `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
+              const vals = recent7.filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd).map(r => r.temperature);
               return (
                 <View key={i} style={{flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2}}>
-                  <Text style={styles.tableCell}>{dateLabel}</Text>
-                  <Text style={styles.tableCell}>{avgV !== null ? avgV.toFixed(1) : '--'}</Text>
-                  <Text style={styles.tableCell}>{minV !== null ? minV.toFixed(1) : '--'}</Text>
-                  <Text style={styles.tableCell}>{maxV !== null ? maxV.toFixed(1) : '--'}</Text>
+                  <Text style={styles.tableCell}>{`${d.toLocaleString('en',{month:'short'})} ${d.getDate()}`}</Text>
+                  <Text style={styles.tableCell}>{p.val.toFixed(1)}</Text>
+                  <Text style={styles.tableCell}>{Math.min(...vals).toFixed(1)}</Text>
+                  <Text style={styles.tableCell}>{Math.max(...vals).toFixed(1)}</Text>
                   <Text style={styles.tableCell}>{vals.length}</Text>
                 </View>
               );
@@ -520,7 +535,7 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
               </View>
             )}
           </View>
-          <LineGraph data={humData} color="#06B6D4" unit="%" />
+          <LineGraph data={humData} color="#06B6D4" unit="%" xLabels={humXLabels} />
           {/* Table for humidity */}
           <View style={{marginTop: 12}}>
             <View style={{flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4}}>
@@ -528,18 +543,15 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
               <Text style={styles.tableHeader}>Avg</Text>
               <Text style={styles.tableHeader}>Count</Text>
             </View>
-            {Array.from({length: 7}, (_, i) => {
-              const d = new Date();
-              d.setDate(d.getDate() - (6 - i));
-              const dayStart = d.setHours(0,0,0,0);
+            {humPoints.map((p, i) => {
+              const d = new Date(now - (6 - p.i) * 86400000);
+              const dayStart = now - (6 - p.i) * 86400000;
               const dayEnd = dayStart + 86400000;
-              const vals = recent.filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd).map(r => r.humidity).filter((v): v is number => v != null);
-              const avgV = vals.length ? avg(vals) : null;
-              const dateLabel = `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
+              const vals = recent7.filter(r => r.timestamp >= dayStart && r.timestamp < dayEnd).map(r => r.humidity).filter((v): v is number => v != null);
               return (
                 <View key={i} style={{flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2}}>
-                  <Text style={styles.tableCell}>{dateLabel}</Text>
-                  <Text style={styles.tableCell}>{avgV !== null ? avgV.toFixed(1) : '--'}</Text>
+                  <Text style={styles.tableCell}>{`${d.toLocaleString('en',{month:'short'})} ${d.getDate()}`}</Text>
+                  <Text style={styles.tableCell}>{p.val.toFixed(1)}</Text>
                   <Text style={styles.tableCell}>{vals.length}</Text>
                 </View>
               );

@@ -9,5 +9,6 @@ export interface Device {
   temp_high_threshold: number;
   battery_level?: number | null;
   last_sync?: number | null;
+  secret_key?: string | null;
   created_at: number;
 }

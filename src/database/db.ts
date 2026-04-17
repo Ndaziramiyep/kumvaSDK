@@ -38,6 +38,14 @@ export async function getReadyDb(): Promise<any> {
   await raw.executeSql(CREATE_INCIDENTS_TABLE);
   await raw.executeSql(CREATE_REPORTS_TABLE);
   await raw.executeSql(CREATE_REMINDERS_TABLE);
+  // Migration: add secret_key column if it doesn't exist yet
+  await raw.executeSql(`ALTER TABLE devices ADD COLUMN secret_key TEXT`).catch(() => {});
+  // Migration: add last_synced_at column if it doesn't exist yet
+  await raw.executeSql(`ALTER TABLE devices ADD COLUMN last_synced_at INTEGER`).catch(() => {});
+  // Migration: add new incidents columns if they don't exist yet
+  await raw.executeSql(`ALTER TABLE incidents ADD COLUMN device_name TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await raw.executeSql(`ALTER TABLE incidents ADD COLUMN device_category TEXT NOT NULL DEFAULT ''`).catch(() => {});
+  await raw.executeSql(`ALTER TABLE incidents ADD COLUMN min_temperature REAL`).catch(() => {});
 
   readyDb = db;
   return readyDb;

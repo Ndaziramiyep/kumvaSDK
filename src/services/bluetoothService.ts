@@ -7,6 +7,9 @@ const bleEvents = MinewBleModule ? new NativeEventEmitter(MinewBleModule) : null
 export const startScan  = () => MinewBleModule?.startScan();
 export const stopScan   = () => MinewBleModule?.stopScan();
 
+// ── Secret Key ────────────────────────────────────────────────────────────────
+export const setSecretKey = (key: string) => MinewBleModule?.setSecretKey(key);
+
 // ── Connect ───────────────────────────────────────────────────────────────────
 export const connect    = (mac: string) => MinewBleModule?.connectToDevice(mac, null);
 export const disConnect = (mac: string) => MinewBleModule?.disconnectDevice(mac);

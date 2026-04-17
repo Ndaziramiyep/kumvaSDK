@@ -5,8 +5,10 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useDevices } from '../../hooks/useDevices';
-import { getReadingsByDevice } from '../../database/repositories/readingRepository';
+import { getReadingsLast7Days } from '../../database/repositories/readingRepository';
+import { countIncidentsByDevice } from '../../database/repositories/incidentRepository';
 import { Device, DeviceCategory } from '../../types/device';
 import { Reading } from '../../types/reading';
 import { useLiveDeviceStates } from '../../hooks/useLiveDevice';
@@ -24,14 +26,7 @@ const CATEGORY_RANGES: Record<DeviceCategory, string> = {
 
 const LINE_COLORS = ['#5C6BC0', '#06B6D4', '#F59E0B', '#22C55E', '#EF4444', '#A855F7'];
 
-function getXLabels(): string[] {
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
-  });
-}
-
+// Always returns exactly 7 slots (one per day), null if no data that day
 function getDailyAvgs(readings: Reading[]): (number | null)[] {
   const now = Date.now();
   return Array.from({ length: 7 }, (_, i) => {
@@ -44,14 +39,6 @@ function getDailyAvgs(readings: Reading[]): (number | null)[] {
   });
 }
 
-function fillNulls(arr: (number | null)[]): number[] {
-  const filled = [...arr];
-  for (let i = 0; i < filled.length; i++) {
-    if (filled[i] === null) filled[i] = filled[i - 1] ?? filled[i + 1] ?? 0;
-  }
-  return filled as number[];
-}
-
 // ── Combined category graph ───────────────────────────────────────────────────
 function CategoryGraph({
   devices, readingsMap,
@@ -60,17 +47,40 @@ function CategoryGraph({
   readingsMap: Record<string, Reading[]>;
 }) {
   const [plotWidth, setPlotWidth] = useState(0);
-  const xLabels = getXLabels();
+
+  const now = Date.now();
+  // X-axis: always 7 evenly-spaced day labels
+  const xLabels = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now - (6 - i) * 86400000);
+    return `${d.toLocaleString('en', { month: 'short' })} ${d.getDate()}`;
+  });
 
   const seriesData = devices.map((d, idx) => ({
     device: d,
-    data: fillNulls(getDailyAvgs(readingsMap[d.device_id] ?? [])),
+    slots: getDailyAvgs(readingsMap[d.device_id] ?? []), // 7 slots, null = no data
     color: LINE_COLORS[idx % LINE_COLORS.length],
   }));
 
-  // Global min/max across all devices + thresholds
+  // Check if any device has at least 1 data point
+  const hasAnyData = seriesData.some(s => s.slots.some(v => v !== null));
+
+  if (!hasAnyData) {
+    return (
+      <View style={gs.graphCard}>
+        <Text style={gs.graphTitle}>Temperature Overview (Last 7 Days)</Text>
+        <View style={{ height: GRAPH_H, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ fontSize: 12, color: '#9CA3AF' }}>No data yet — sync a device to see readings</Text>
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+          {xLabels.map((l, i) => <Text key={i} style={gs.xLabel}>{l}</Text>)}
+        </View>
+      </View>
+    );
+  }
+
+  // Y scale: include all non-null values + thresholds
   const allVals = seriesData.flatMap(s => [
-    ...s.data,
+    ...s.slots.filter((v): v is number => v !== null),
     s.device.temp_high_threshold,
     s.device.temp_low_threshold,
   ]);
@@ -78,17 +88,17 @@ function CategoryGraph({
   const maxV = Math.max(...allVals) + 2;
   const range = maxV - minV || 1;
   const toY = (v: number) => GRAPH_H - ((v - minV) / range) * GRAPH_H;
+  // X: evenly spaced — slot i maps to fraction i/6 of plotWidth
+  const toX = (i: number, w: number) => (i / 6) * w;
 
   const yStep = (maxV - minV) / 4;
   const yLabels = Array.from({ length: 5 }, (_, i) => Math.round(maxV - i * yStep));
 
-  // Collect unique threshold pairs to avoid duplicate lines
-  const thresholds: { high: number; low: number; color: string }[] = [];
+  const thresholds: { high: number; low: number }[] = [];
   seriesData.forEach(s => {
-    const exists = thresholds.find(
-      t => t.high === s.device.temp_high_threshold && t.low === s.device.temp_low_threshold
-    );
-    if (!exists) thresholds.push({ high: s.device.temp_high_threshold, low: s.device.temp_low_threshold, color: s.color });
+    if (!thresholds.find(t => t.high === s.device.temp_high_threshold && t.low === s.device.temp_low_threshold)) {
+      thresholds.push({ high: s.device.temp_high_threshold, low: s.device.temp_low_threshold });
+    }
   });
 
   return (
@@ -96,7 +106,6 @@ function CategoryGraph({
       <Text style={gs.graphTitle}>Temperature Overview (Last 7 Days)</Text>
 
       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-        {/* Y axis labels + line */}
         <View style={{ width: Y_W, height: GRAPH_H, justifyContent: 'space-between' }}>
           {yLabels.map((l, i) => (
             <View key={i} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -106,17 +115,10 @@ function CategoryGraph({
           ))}
         </View>
 
-        {/* Y axis vertical line + plot */}
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', height: GRAPH_H }}>
-            {/* Y axis line */}
             <View style={gs.yAxisLine} />
-
-            {/* Plot area */}
-            <View
-              style={{ flex: 1, height: GRAPH_H }}
-              onLayout={e => setPlotWidth(e.nativeEvent.layout.width)}
-            >
+            <View style={{ flex: 1, height: GRAPH_H }} onLayout={e => setPlotWidth(e.nativeEvent.layout.width)}>
               {plotWidth > 0 && (
                 <>
                   {yLabels.map((_, i) => (
@@ -125,47 +127,55 @@ function CategoryGraph({
                   {thresholds.map((t, i) => (
                     <React.Fragment key={i}>
                       <View style={[gs.threshLine, { top: toY(t.high), borderColor: '#EF4444' }]} />
-                      <View style={[gs.threshLine, { top: toY(t.low), borderColor: '#3B82F6' }]} />
+                      <View style={[gs.threshLine, { top: toY(t.low),  borderColor: '#3B82F6' }]} />
                     </React.Fragment>
                   ))}
                   {seriesData.map(s => {
-                    const ptStep = plotWidth / (s.data.length - 1);
-                    const pts = s.data.map((v, i) => ({ x: i * ptStep, y: toY(v) }));
-                    return pts.slice(0, -1).map((p, i) => {
-                      const nx = pts[i + 1];
-                      const dx = nx.x - p.x; const dy = nx.y - p.y;
+                    // Draw segments only between consecutive non-null slots
+                    const segments: JSX.Element[] = [];
+                    for (let i = 0; i < 6; i++) {
+                      const v1 = s.slots[i]; const v2 = s.slots[i + 1];
+                      if (v1 === null || v2 === null) continue;
+                      const x1 = toX(i, plotWidth);     const y1 = toY(v1);
+                      const x2 = toX(i + 1, plotWidth); const y2 = toY(v2);
+                      const dx = x2 - x1; const dy = y2 - y1;
                       const len = Math.sqrt(dx * dx + dy * dy);
                       const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-                      return (
+                      segments.push(
                         <View key={`${s.device.device_id}-${i}`} style={{
-                          position: 'absolute', left: p.x, top: p.y,
+                          position: 'absolute', left: x1, top: y1,
                           width: len, height: 2, backgroundColor: s.color,
                           transformOrigin: '0 50%',
                           transform: [{ rotate: `${angle}deg` }],
                         }} />
                       );
+                    }
+                    // Draw dots on data points
+                    s.slots.forEach((v, i) => {
+                      if (v === null) return;
+                      segments.push(
+                        <View key={`dot-${s.device.device_id}-${i}`} style={{
+                          position: 'absolute',
+                          left: toX(i, plotWidth) - 3,
+                          top: toY(v) - 3,
+                          width: 6, height: 6, borderRadius: 3,
+                          backgroundColor: s.color,
+                        }} />
+                      );
                     });
+                    return segments;
                   })}
                 </>
               )}
             </View>
           </View>
-
-          {/* X axis line */}
           <View style={gs.xAxisLine} />
-
-          {/* X labels */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
-            {xLabels.map((l, i) => (
-              <View key={i} style={{ alignItems: 'center' }}>
-                <Text style={gs.xLabel}>{l}</Text>
-              </View>
-            ))}
+            {xLabels.map((l, i) => <Text key={i} style={gs.xLabel}>{l}</Text>)}
           </View>
         </View>
       </View>
 
-      {/* Legend */}
       <View style={gs.legend}>
         <View style={gs.legendItem}>
           <View style={[gs.legendDash, { borderColor: '#EF4444' }]} />
@@ -188,13 +198,14 @@ function CategoryGraph({
 
 // ── Device grid card ──────────────────────────────────────────────────────────
 function DeviceCard({
-  device, lastTemp, lastHumidity, liveBattery, isActive, onPress,
+  device, lastTemp, lastHumidity, liveBattery, isActive, incidentCount, onPress,
 }: {
   device: Device;
   lastTemp: number | null;
   lastHumidity: number | null;
   liveBattery?: number | null;
   isActive: boolean;
+  incidentCount: number;
   onPress: () => void;
 }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -249,12 +260,18 @@ function DeviceCard({
           </View>
         </View>
 
-        {/* Battery */}
+        {/* Battery + Incidents */}
         <View style={dc.batteryRow}>
           <Ionicons name="battery-half-outline" size={12} color="#9CA3AF" />
           <Text style={dc.battery}>
             {liveBattery != null ? `${liveBattery}%` : device.battery_level != null ? `${device.battery_level}%` : '--'}
           </Text>
+          {incidentCount > 0 && (
+            <View style={dc.incidentBadge}>
+              <Ionicons name="warning-outline" size={10} color="#EF4444" />
+              <Text style={dc.incidentText}>{incidentCount}</Text>
+            </View>
+          )}
         </View>
       </Animated.View>
     </Pressable>
@@ -272,6 +289,7 @@ function CategorySection({
   liveStates: Map<string, any>;
 }) {
   const [readingsMap, setReadingsMap] = useState<Record<string, Reading[]>>({});
+  const [incidentCounts, setIncidentCounts] = useState<Record<string, number>>({});
   const fadeAnim  = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(28)).current;
 
@@ -284,8 +302,11 @@ function CategorySection({
 
   useEffect(() => {
     devices.forEach(d => {
-      getReadingsByDevice(d.device_id, 100)
+      getReadingsLast7Days(d.device_id)
         .then(r => setReadingsMap(prev => ({ ...prev, [d.device_id]: r })))
+        .catch(console.error);
+      countIncidentsByDevice(d.device_id)
+        .then(cnt => setIncidentCounts(prev => ({ ...prev, [d.device_id]: cnt })))
         .catch(console.error);
     });
   }, [devices]);
@@ -339,6 +360,7 @@ function CategorySection({
                   lastHumidity={lastHumidity}
                   liveBattery={liveState?.battery ?? null}
                   isActive={isActive}
+                  incidentCount={incidentCounts[d.device_id] ?? 0}
                   onPress={() => navigation.navigate('DeviceDetail', { deviceId: d.device_id })}
                 />
               );
@@ -404,23 +426,21 @@ export default function DashboardScreen({ navigation }: any) {
         <Image source={require('../../../assets/Kumva-New-Logo-D.png')} style={ms.logo} resizeMode="contain" />
         <Text style={ms.appTitle}>Kumva Insights</Text>
         <View style={ms.topRight}>
-          {!isEmpty && (
-            <Pressable
-              style={ms.addBtn}
-              onPress={() => navigation.navigate('AddDevice')}
-              onPressIn={() => Animated.spring(addBtnScale, { toValue: 0.9, useNativeDriver: true, friction: 8 }).start()}
-              onPressOut={() => Animated.spring(addBtnScale, { toValue: 1,  useNativeDriver: true, friction: 6 }).start()}
-            >
-              <Ionicons name="add" size={20} color="#fff" />
-            </Pressable>
-          )}
+          <Pressable
+            style={ms.addBtn}
+            onPress={() => navigation.navigate('AddDevice')}
+            onPressIn={() => Animated.spring(addBtnScale, { toValue: 0.9, useNativeDriver: true, friction: 8 }).start()}
+            onPressOut={() => Animated.spring(addBtnScale, { toValue: 1,  useNativeDriver: true, friction: 6 }).start()}
+          >
+            <Ionicons name="add" size={22} color="#fff" />
+          </Pressable>
           <TouchableOpacity
             style={ms.bellBtn}
             onPress={() => navigation.navigate('Notifications')}
             activeOpacity={0.7}
           >
             <Animated.View style={{ transform: [{ translateX: bellShake }] }}>
-              <Ionicons name="notifications-outline" size={20} color="#1C1C1E" />
+              <Ionicons name="notifications-outline" size={22} color="#5C6BC0" />
             </Animated.View>
           </TouchableOpacity>
         </View>
@@ -428,30 +448,42 @@ export default function DashboardScreen({ navigation }: any) {
 
       {isEmpty ? (
         <View style={ms.emptyWrap}>
+          {/* No-signal icon */}
           <View style={ms.iconCircle}>
-            <View style={ms.noSignal}>
-              <View style={ms.diagLine} />
-              <View style={[ms.arc, { width: 52, height: 52, borderRadius: 26, top: 14, left: 14 }]} />
-              <View style={[ms.arc, { width: 34, height: 34, borderRadius: 17, top: 23, left: 23 }]} />
-              <View style={[ms.arc, { width: 16, height: 16, borderRadius: 8,  top: 32, left: 32 }]} />
+            <View style={ms.noSignalIcon}>
+              <View style={ms.signalArc1} />
+              <View style={ms.signalArc2} />
+              <View style={ms.signalArc3} />
+              <View style={ms.signalSlash} />
             </View>
           </View>
+
           <Text style={ms.emptyTitle}>No devices added yet</Text>
           <Text style={ms.emptySubtitle}>
-            Start monitoring your storage environment{'\n'}
-            by connecting your first BLE sensor.
+            Start monitoring your storage environment{' '}
+            by connecting your first BLE sensor. Track{' '}
+            incidents and  view real-time data.
           </Text>
+
           <Pressable
             style={ms.addDeviceBtnWrap}
             onPress={() => navigation.navigate('AddDevice')}
             onPressIn={() => Animated.spring(addBtnScale, { toValue: 0.96, useNativeDriver: true, friction: 8 }).start()}
             onPressOut={() => Animated.spring(addBtnScale, { toValue: 1,    useNativeDriver: true, friction: 6 }).start()}
           >
-            <Animated.View style={[ms.addDeviceBtn, { transform: [{ scale: addBtnScale }] }]}>
-              <Ionicons name="add-circle-outline" size={20} color="#fff" />
-              <Text style={ms.addDeviceBtnText}>Add Device</Text>
+            <Animated.View style={{ transform: [{ scale: addBtnScale }] }}>
+              <LinearGradient
+                colors={['#6B7FE3', '#9B6FE8']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={ms.addDeviceBtn}
+              >
+                <Ionicons name="add-circle-outline" size={20} color="#fff" />
+                <Text style={ms.addDeviceBtnText}>Add Device</Text>
+              </LinearGradient>
             </Animated.View>
           </Pressable>
+
           <Text style={ms.footer}>CONNECTED INFRASTRUCTURE STARTS HERE</Text>
         </View>
       ) : (
@@ -471,32 +503,76 @@ export default function DashboardScreen({ navigation }: any) {
 const ms = StyleSheet.create({
   container:  { flex: 1, backgroundColor: '#F4F6FB' },
   topBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10,
     backgroundColor: '#fff',
     borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E5E7EB',
   },
-  logo:       { width: 48, height: 32 },
-  appTitle:   { fontSize: 17, fontWeight: '700', color: '#1C1C1E' },
-  topRight:   { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  addBtn:     { width: 32, height: 32, borderRadius: 8, backgroundColor: '#5C6BC0', alignItems: 'center', justifyContent: 'center' },
-  bellBtn:    { width: 32, height: 32, borderRadius: 8, backgroundColor: '#F4F6FB', alignItems: 'center', justifyContent: 'center' },
+  topLeft:  { flexDirection: 'row', alignItems: 'center' },
+  logo:     { width: 44, height: 44 },
+  appTitle: {
+    position: 'absolute', left: 0, right: 0,
+    textAlign: 'center',
+    fontSize: 18, fontWeight: '800', color: '#1C1C1E', letterSpacing: 0.2,
+  },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 'auto' },
+  addBtn:   {
+    width: 38, height: 38, borderRadius: 12,
+    backgroundColor: '#5C6BC0',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#5C6BC0', shadowOpacity: 0.3, shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 }, elevation: 4,
+  },
+  bellBtn:  {
+    width: 38, height: 38, borderRadius: 12,
+    backgroundColor: '#EEF0FB',
+    alignItems: 'center', justifyContent: 'center',
+  },
   scroll:     { paddingBottom: 48 },
-  emptyWrap:  { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 16 },
-  iconCircle: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#E8EAF6', alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-  noSignal:   { width: 80, height: 80, position: 'relative' },
-  diagLine:   { position: 'absolute', width: 2, height: 90, backgroundColor: '#5C6BC0', top: -5, left: 39, transform: [{ rotate: '-45deg' }], zIndex: 2 },
-  arc:        { position: 'absolute', borderWidth: 3, borderColor: '#5C6BC0', borderBottomColor: 'transparent', borderLeftColor: 'transparent', borderRightColor: 'transparent' },
-  emptyTitle: { fontSize: 22, fontWeight: '800', color: '#1C1C1E', textAlign: 'center' },
+  emptyWrap:  {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 28, gap: 14,
+  },
+  // No-signal icon
+  iconCircle: {
+    width: 100, height: 100, borderRadius: 50,
+    backgroundColor: '#EEEEF6',
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: 8,
+  },
+  noSignalIcon: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center' },
+  signalArc1: {
+    position: 'absolute', width: 48, height: 48, borderRadius: 24,
+    borderWidth: 3, borderColor: '#8B9BE8',
+    borderBottomColor: 'transparent', borderLeftColor: 'transparent',
+    transform: [{ rotate: '45deg' }],
+  },
+  signalArc2: {
+    position: 'absolute', width: 32, height: 32, borderRadius: 16,
+    borderWidth: 3, borderColor: '#8B9BE8',
+    borderBottomColor: 'transparent', borderLeftColor: 'transparent',
+    transform: [{ rotate: '45deg' }],
+  },
+  signalArc3: {
+    position: 'absolute', width: 10, height: 10, borderRadius: 5,
+    backgroundColor: '#8B9BE8',
+  },
+  signalSlash: {
+    position: 'absolute', width: 3, height: 60,
+    backgroundColor: '#8B9BE8', borderRadius: 2,
+    transform: [{ rotate: '45deg' }],
+  },
+  emptyLogo:  { width: 180, height: 110 },
+  emptyBrand: { fontSize: 24, fontWeight: '800', color: '#1C1C1E', letterSpacing: 0.3 },
+  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#374151', textAlign: 'center' },
   emptySubtitle: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 22 },
-  addDeviceBtnWrap: { alignSelf: 'stretch', marginTop: 8 },
+  addDeviceBtnWrap: { alignSelf: 'stretch', marginTop: 4 },
   addDeviceBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: '#5C6BC0', borderRadius: 14, paddingVertical: 16,
-    shadowColor: '#5C6BC0', shadowOpacity: 0.35, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 6,
+    borderRadius: 14, paddingVertical: 18,
   },
   addDeviceBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  footer:     { fontSize: 10, color: '#9CA3AF', letterSpacing: 1.2, fontWeight: '600', marginTop: 8 },
+  footer: { fontSize: 10, color: '#9CA3AF', letterSpacing: 1.2, fontWeight: '600', marginTop: 4 },
 });
 
 const cs = StyleSheet.create({
@@ -532,6 +608,8 @@ const dc = StyleSheet.create({
   valueUnit:   { fontSize: 11, fontWeight: '600', color: '#6B7280', marginBottom: 1 },
   batteryRow:  { flexDirection: 'row', alignItems: 'center', gap: 4 },
   battery:     { fontSize: 11, color: '#9CA3AF' },
+  incidentBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 6, backgroundColor: '#FEE2E2', borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1 },
+  incidentText:  { fontSize: 10, color: '#EF4444', fontWeight: '700' },
 });
 
 const gs = StyleSheet.create({

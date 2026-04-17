@@ -19,7 +19,6 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
 
     companion object {
         private const val TAG = "MinewBLE"
-        private const val DEFAULT_PASSWORD = "minewtech1234567"
     }
 
     override fun getName() = "MinewBleModule"
@@ -46,8 +45,13 @@ class MinewBleModule(private val reactContext: ReactApplicationContext) :
     }
 
     init {
-        manager.setSecretKey(DEFAULT_PASSWORD)
         manager.setOnConnStateListener(connStateListener)
+    }
+
+    // ── Set secret key ────────────────────────────────────────────────────────
+    @ReactMethod
+    fun setSecretKey(key: String) {
+        manager.setSecretKey(key)
     }
 
     private fun mapState(state: MSensorConnectionState): String = when (state) {

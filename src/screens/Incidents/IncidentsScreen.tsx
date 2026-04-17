@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
-  StyleSheet, Alert, Modal,
+  StyleSheet, Alert, Modal, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -9,8 +9,9 @@ import { getAllIncidents } from '../../database/repositories/incidentRepository'
 import { useAppStore } from '../../store/store';
 import { Incident } from '../../types/incident';
 import { Device, DeviceCategory } from '../../types/device';
-import { exportPdf, exportExcel } from '../../services/exportService';
+import { exportReportPdf, exportReportExcel } from '../../services/exportService';
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function formatTimestamp(ts: number): string {
   const d = new Date(ts);
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -25,29 +26,29 @@ function formatDuration(start: number, end?: number | null): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
-function categoryLabel(cat: string): string {
-  const map: Record<string, string> = {
-    freezer: 'Freezer', fridge: 'Fridge',
-    cold_room: 'Cold Room', general: 'General',
-  };
-  return map[cat] ?? cat;
-}
-
-const THREE_MONTHS_AGO = (() => { const d = new Date(); d.setMonth(d.getMonth() - 3); d.setHours(0,0,0,0); return d.getTime(); })();
-const TODAY_END = (() => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); })();
-
-const CATEGORY_OPTIONS: { label: string; value: DeviceCategory | 'all' }[] = [
-  { label: 'All', value: 'all' },
-  { label: 'Freezer', value: 'freezer' },
-  { label: 'Fridge', value: 'fridge' },
-  { label: 'Cold Room', value: 'cold_room' },
-  { label: 'General', value: 'general' },
-];
-
 function formatDate(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
 }
 
+function catLabel(cat: string): string {
+  return ({ freezer: 'Freezer', fridge: 'Fridge', cold_room: 'Cold Room', general: 'General' } as any)[cat] ?? cat;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+const THREE_MONTHS_AGO = (() => { const d = new Date(); d.setMonth(d.getMonth() - 3); d.setHours(0,0,0,0); return d.getTime(); })();
+const TODAY_END        = (() => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); })();
+
+const CATEGORY_OPTIONS: { label: string; value: DeviceCategory | 'all' }[] = [
+  { label: 'All Categories', value: 'all' },
+  { label: 'Freezer',        value: 'freezer' },
+  { label: 'Fridge',         value: 'fridge' },
+  { label: 'Cold Room',      value: 'cold_room' },
+  { label: 'General',        value: 'general' },
+];
+
+type TimeRange = 'Week' | 'Month' | 'Custom';
+
+// ── Date Picker ───────────────────────────────────────────────────────────────
 function DatePickerModal({ visible, value, minDate, maxDate, onConfirm, onCancel }: {
   visible: boolean; value: number; minDate: number; maxDate: number;
   onConfirm: (ts: number) => void; onCancel: () => void;
@@ -64,6 +65,7 @@ function DatePickerModal({ visible, value, minDate, maxDate, onConfirm, onCancel
   const canGoNext = new Date(year, month + 1, 1).getTime() <= maxDate;
   const selectedDay = new Date(value).getDate();
   const isCurrentMonth = new Date(value).getFullYear() === year && new Date(value).getMonth() === month;
+
   return (
     <Modal visible={visible} transparent animationType="fade">
       <View style={dp.overlay}>
@@ -101,121 +103,168 @@ function DatePickerModal({ visible, value, minDate, maxDate, onConfirm, onCancel
   );
 }
 
+// ── Row type ──────────────────────────────────────────────────────────────────
 type Row = Incident & { deviceName: string; deviceCategory: string };
 
-const SAMPLE_INCIDENTS: Row[] = [
-  { incident_id: 's1', device_id: 'd1', start_time: Date.now() - 2 * 3600000,   end_time: Date.now() - 1 * 3600000,   max_temperature: 25.2, deviceName: 'Main Freezer 01',  deviceCategory: 'freezer'   },
-  { incident_id: 's2', device_id: 'd2', start_time: Date.now() - 6 * 3600000,   end_time: Date.now() - 5 * 3600000,   max_temperature: 22.8, deviceName: 'Fridge Unit A',    deviceCategory: 'fridge'    },
-  { incident_id: 's3', device_id: 'd3', start_time: Date.now() - 26 * 3600000,  end_time: null,                        max_temperature: 28.5, deviceName: 'Cold Room North',  deviceCategory: 'cold_room' },
-  { incident_id: 's4', device_id: 'd4', start_time: Date.now() - 48 * 3600000,  end_time: Date.now() - 46 * 3600000,  max_temperature: 24.1, deviceName: 'General Store B',  deviceCategory: 'general'   },
-  { incident_id: 's5', device_id: 'd1', start_time: Date.now() - 72 * 3600000,  end_time: Date.now() - 71 * 3600000,  max_temperature: 26.7, deviceName: 'Main Freezer 01',  deviceCategory: 'freezer'   },
-  { incident_id: 's6', device_id: 'd5', start_time: Date.now() - 96 * 3600000,  end_time: Date.now() - 94 * 3600000,  max_temperature: 23.9, deviceName: 'Fridge Unit B',    deviceCategory: 'fridge'    },
-  { incident_id: 's7', device_id: 'd3', start_time: Date.now() - 120 * 3600000, end_time: Date.now() - 118 * 3600000, max_temperature: 27.3, deviceName: 'Cold Room North',  deviceCategory: 'cold_room' },
-  { incident_id: 's8', device_id: 'd6', start_time: Date.now() - 144 * 3600000, end_time: Date.now() - 143 * 3600000, max_temperature: 25.8, deviceName: 'Freezer Unit 02',  deviceCategory: 'freezer'   },
-];
-
-export default function IncidentsScreen({ navigation }: any) {
+// ── Main Screen ───────────────────────────────────────────────────────────────
+export default function IncidentsScreen() {
   const devices = useAppStore((s: any) => s.devices);
-  const [incidents, setIncidents] = useState<Row[]>([]);
-  const [category, setCategory] = useState<DeviceCategory | 'all'>('all');
-  const [startDate, setStartDate] = useState(THREE_MONTHS_AGO);
-  const [endDate, setEndDate] = useState(TODAY_END);
-  const [showStartPicker, setShowStartPicker] = useState(false);
-  const [showEndPicker, setShowEndPicker] = useState(false);
+  const [allIncidents, setAllIncidents] = useState<Row[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [exporting, setExporting]       = useState(false);
 
-  useEffect(() => {
-    getAllIncidents()
-      .then(data => {
-        const deviceMap = new Map<string, Device>(devices.map((d: Device) => [d.device_id, d]));
-        const rows: Row[] = data.map(inc => {
-          const dev = deviceMap.get(inc.device_id);
-          return {
-            ...inc,
-            deviceName: dev?.name ?? inc.device_id,
-            deviceCategory: dev?.category ?? '',
-          };
-        });
-        setIncidents(rows);
-      })
-      .catch(console.error);
+  const [category, setCategory]                     = useState<DeviceCategory | 'all'>('all');
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const [timeRange, setTimeRange]                   = useState<TimeRange>('Week');
+  const [startDate, setStartDate]                   = useState(() => { const d = new Date(); d.setDate(d.getDate() - 7); d.setHours(0,0,0,0); return d.getTime(); });
+  const [endDate, setEndDate]                       = useState(TODAY_END);
+  const [showStartPicker, setShowStartPicker]       = useState(false);
+  const [showEndPicker, setShowEndPicker]           = useState(false);
+
+  // ── Load incidents from DB ─────────────────────────────────────────────────
+  const loadIncidents = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await getAllIncidents();
+      const deviceMap = new Map<string, Device>(devices.map((d: Device) => [d.device_id, d]));
+      const rows: Row[] = data.map(inc => {
+        const dev = deviceMap.get(inc.device_id);
+        return {
+          ...inc,
+          // Prefer stored device_name/device_category (set at incident creation time)
+          deviceName:     (inc as any).device_name || dev?.name     || inc.device_id,
+          deviceCategory: (inc as any).device_category || dev?.category || '',
+        };
+      });
+      setAllIncidents(rows);
+    } catch (e) {
+      console.error('[Incidents] load error', e);
+    } finally {
+      setLoading(false);
+    }
   }, [devices]);
 
-  const filtered = useMemo(() => {
-    return incidents.filter(r => {
-      const matchCat = category === 'all' || r.deviceCategory === category;
-      const matchDate = r.start_time >= startDate && r.start_time <= endDate;
-      return matchCat && matchDate;
-    });
-  }, [incidents, category, startDate, endDate]);
+  useEffect(() => { loadIncidents(); }, [loadIncidents]);
 
-  const displayData = filtered.length > 0 ? filtered : SAMPLE_INCIDENTS;
-  const isSample = filtered.length === 0;
+  const applyTimeRange = (range: TimeRange) => {
+    setTimeRange(range);
+    const now = Date.now();
+    if (range === 'Week')  { setStartDate(now - 7 * 86400000);  setEndDate(TODAY_END); }
+    if (range === 'Month') { setStartDate(now - 30 * 86400000); setEndDate(TODAY_END); }
+  };
 
+  // ── Filter ─────────────────────────────────────────────────────────────────
+  const filtered = useMemo(() => allIncidents.filter(r => {
+    const matchCat  = category === 'all' || r.deviceCategory === category;
+    const matchDate = r.start_time >= startDate && r.start_time <= endDate;
+    return matchCat && matchDate;
+  }), [allIncidents, category, startDate, endDate]);
+
+  const selectedCategoryLabel = CATEGORY_OPTIONS.find(o => o.value === category)?.label ?? 'All Categories';
+
+  // ── Export ─────────────────────────────────────────────────────────────────
   const exportAs = async (format: 'PDF' | 'Excel') => {
     if (filtered.length === 0) {
-      Alert.alert('No Data', 'No incidents to export.');
+      Alert.alert('No Data', 'No incidents match the current filters.');
       return;
     }
+    setExporting(true);
     try {
-      // For demo, export for first device or all
-      const deviceId = filtered[0].device_id;
-      const period = 'all';
-      const fileUri = format === 'PDF' ? await exportPdf(deviceId, period) : await exportExcel(deviceId, period);
-      Alert.alert('Export Successful', `File saved at ${fileUri}`);
-    } catch (error) {
-      Alert.alert('Export Failed', 'Could not export data.');
+      const rows = filtered.map(r => ({
+        device:      r.deviceName,
+        category:    catLabel(r.deviceCategory),
+        temperature: r.max_temperature,
+        humidity:    '--',
+        timestamp:   formatTimestamp(r.start_time).replace('\n', ' ') + (r.end_time ? ` → ${formatTimestamp(r.end_time).replace('\n', ' ')}` : ' (Ongoing)'),
+      }));
+      const start = formatDate(startDate);
+      const end   = formatDate(endDate);
+      const uri   = format === 'PDF'
+        ? await exportReportPdf(rows, start, end, selectedCategoryLabel)
+        : await exportReportExcel(rows, start, end, selectedCategoryLabel);
+      Alert.alert('Export Successful', `Saved to Downloads.\n\n${uri}`, [{ text: 'OK' }]);
+    } catch {
+      Alert.alert('Export Failed', 'Could not export incidents.');
+    } finally {
+      setExporting(false);
     }
   };
 
+  // ── Render header (filters + table head) ──────────────────────────────────
   const renderHeader = () => (
     <View>
-      {/* Category chips */}
-      <View style={styles.chipsRow}>
-        {CATEGORY_OPTIONS.map(o => (
-          <TouchableOpacity key={o.value} style={[styles.chip, category === o.value && styles.chipActive]}
-            onPress={() => setCategory(o.value)}>
-            <Text style={[styles.chipText, category === o.value && styles.chipTextActive]}>{o.label}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Date range */}
-      <View style={styles.dateRow}>
-        <TouchableOpacity style={styles.dateInput} onPress={() => setShowStartPicker(true)}>
-          <Ionicons name="calendar-outline" size={14} color="#9CA3AF" />
-          <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+      {/* Filter card */}
+      <View style={styles.filterCard}>
+        <Text style={styles.filterLabel}>Category</Text>
+        <TouchableOpacity style={styles.dropdown} onPress={() => setShowCategoryDropdown(v => !v)} activeOpacity={0.8}>
+          <Text style={styles.dropdownText}>{selectedCategoryLabel}</Text>
+          <Ionicons name={showCategoryDropdown ? 'chevron-up' : 'chevron-down'} size={18} color="#6B7280" />
         </TouchableOpacity>
-        <Text style={styles.dateSep}>→</Text>
-        <TouchableOpacity style={styles.dateInput} onPress={() => setShowEndPicker(true)}>
-          <Ionicons name="calendar-outline" size={14} color="#9CA3AF" />
-          <Text style={styles.dateText}>{formatDate(endDate)}</Text>
-        </TouchableOpacity>
-      </View>
+        {showCategoryDropdown && (
+          <View style={styles.dropdownList}>
+            {CATEGORY_OPTIONS.map(o => (
+              <TouchableOpacity
+                key={o.value}
+                style={[styles.dropdownItem, o.value === category && styles.dropdownItemActive]}
+                onPress={() => { setCategory(o.value); setShowCategoryDropdown(false); }}
+              >
+                <Text style={[styles.dropdownItemText, o.value === category && styles.dropdownItemTextActive]}>{o.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
-      {/* Recent Activity + Export */}
-      <View style={styles.sectionTitleRow}>
-        <Text style={styles.sectionTitle}>Recent Activity</Text>
-        {isSample && (
-          <View style={styles.sampleBadge}>
-            <Text style={styles.sampleBadgeText}>SAMPLE DATA</Text>
+        {/* Week / Month / Custom */}
+        <View style={styles.tabRow}>
+          {(['Week', 'Month', 'Custom'] as TimeRange[]).map(t => (
+            <TouchableOpacity key={t} style={[styles.tab, timeRange === t && styles.tabActive]} onPress={() => applyTimeRange(t)}>
+              <Text style={[styles.tabText, timeRange === t && styles.tabTextActive]}>{t}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Date inputs — only for Custom */}
+        {timeRange === 'Custom' && (
+          <View style={styles.dateRow}>
+            <View style={styles.dateCol}>
+              <Text style={styles.dateLabel}>START DATE</Text>
+              <TouchableOpacity style={styles.dateInput} onPress={() => setShowStartPicker(true)}>
+                <Ionicons name="calendar-outline" size={15} color="#9CA3AF" />
+                <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.dateCol}>
+              <Text style={styles.dateLabel}>END DATE</Text>
+              <TouchableOpacity style={styles.dateInput} onPress={() => setShowEndPicker(true)}>
+                <Ionicons name="calendar-outline" size={15} color="#9CA3AF" />
+                <Text style={styles.dateText}>{formatDate(endDate)}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
       </View>
-      <View style={styles.exportRow}>
-        <TouchableOpacity style={styles.exportBtn} onPress={() => exportAs('PDF')} activeOpacity={0.85}>
-          <Ionicons name="document-text-outline" size={15} color="#fff" />
-          <Text style={styles.exportText}>Export as PDF</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.exportBtn, styles.exportBtnSecondary]} onPress={() => exportAs('Excel')} activeOpacity={0.85}>
-          <Ionicons name="grid-outline" size={15} color="#fff" />
-          <Text style={styles.exportText}>Export as Excel</Text>
-        </TouchableOpacity>
+
+      {/* Section title + export */}
+      <View style={styles.sectionRow}>
+        <Text style={styles.sectionTitle}>
+          {filtered.length} Incident{filtered.length !== 1 ? 's' : ''}
+        </Text>
+        <View style={styles.exportBtns}>
+          <TouchableOpacity style={styles.exportBtn} onPress={() => exportAs('PDF')} disabled={exporting}>
+            <Ionicons name="document-text-outline" size={14} color="#fff" />
+            <Text style={styles.exportBtnText}>PDF</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: '#7C3AED' }]} onPress={() => exportAs('Excel')} disabled={exporting}>
+            <Ionicons name="grid-outline" size={14} color="#fff" />
+            <Text style={styles.exportBtnText}>Excel</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Table header */}
+      {/* Table column headers */}
       <View style={styles.tableHeader}>
         <Text style={[styles.colHead, styles.colDevice]}>DEVICE</Text>
-        <Text style={[styles.colHead, styles.colTime]}>TIME{'\n'}STAMP</Text>
+        <Text style={[styles.colHead, styles.colTime]}>TIMESTAMP</Text>
         <Text style={[styles.colHead, styles.colCat]}>CATEGORY</Text>
         <Text style={[styles.colHead, styles.colDur]}>DURATION</Text>
       </View>
@@ -225,118 +274,121 @@ export default function IncidentsScreen({ navigation }: any) {
 
   const renderEmpty = () => (
     <View style={styles.emptyWrap}>
-      <Ionicons name="warning-outline" size={40} color="#D1D5DB" />
-      <Text style={styles.emptyText}>No incidents recorded yet</Text>
+      {loading
+        ? <ActivityIndicator color="#5C6BC0" size="large" />
+        : <>
+            <Ionicons name="warning-outline" size={44} color="#D1D5DB" />
+            <Text style={styles.emptyTitle}>No incidents found</Text>
+            <Text style={styles.emptySubtitle}>
+              {allIncidents.length === 0
+                ? 'No incidents have been recorded yet.\nIncidents are created automatically when\na device exceeds its temperature thresholds.'
+                : 'No incidents match the current filters.\nTry adjusting the category or date range.'}
+            </Text>
+          </>
+      }
     </View>
   );
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Incidents</Text>
       </View>
 
       <FlatList
-        data={displayData}
+        data={filtered}
         keyExtractor={(item, i) => `${item.incident_id ?? i}`}
         ListHeaderComponent={renderHeader}
+        ListEmptyComponent={renderEmpty}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
         renderItem={({ item, index }) => (
           <View style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlt]}>
             <Text style={[styles.cell, styles.colDevice]} numberOfLines={2}>{item.deviceName}</Text>
             <Text style={[styles.cell, styles.colTime]}>{formatTimestamp(item.start_time)}</Text>
-            <Text style={[styles.cell, styles.colCat]}>{categoryLabel(item.deviceCategory)}</Text>
+            <Text style={[styles.cell, styles.colCat]}>{catLabel(item.deviceCategory)}</Text>
             <Text style={[styles.cell, styles.colDur]}>{formatDuration(item.start_time, item.end_time)}</Text>
           </View>
         )}
       />
 
       <DatePickerModal visible={showStartPicker} value={startDate} minDate={THREE_MONTHS_AGO} maxDate={endDate}
-        onConfirm={ts => { setStartDate(ts); setShowStartPicker(false); }} onCancel={() => setShowStartPicker(false)} />
+        onConfirm={ts => { setStartDate(ts); setShowStartPicker(false); setTimeRange('Custom'); }} onCancel={() => setShowStartPicker(false)} />
       <DatePickerModal visible={showEndPicker} value={endDate} minDate={startDate} maxDate={TODAY_END}
-        onConfirm={ts => { setEndDate(ts); setShowEndPicker(false); }} onCancel={() => setShowEndPicker(false)} />
+        onConfirm={ts => { setEndDate(ts); setShowEndPicker(false); setTimeRange('Custom'); }} onCancel={() => setShowEndPicker(false)} />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#F4F6FB' },
-
-  header: {
-    paddingHorizontal: 16, paddingVertical: 14,
-    backgroundColor: '#fff',
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0E0E0',
-    alignItems: 'center',
-  },
+  safe:        { flex: 1, backgroundColor: '#F4F6FB' },
+  header:      { paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#fff', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#E0E0E0', alignItems: 'center' },
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#1C1C1E' },
+  list:        { paddingBottom: 32 },
 
-  list: { paddingBottom: 32 },
+  filterCard: { backgroundColor: '#fff', margin: 16, borderRadius: 14, padding: 16, gap: 14, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 2 },
+  filterLabel: { fontSize: 13, fontWeight: '600', color: '#374151' },
 
-  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginHorizontal: 16, marginTop: 14, marginBottom: 10 },
-  chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F0F2FA', borderWidth: 1, borderColor: '#E5E7EB' },
-  chipActive: { backgroundColor: '#5C6BC0', borderColor: '#5C6BC0' },
-  chipText: { fontSize: 13, color: '#6B7280', fontWeight: '500' },
-  chipTextActive: { color: '#fff', fontWeight: '700' },
-  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 14 },
-  dateInput: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 10 },
-  dateText: { fontSize: 13, color: '#1C1C1E' },
-  dateSep: { fontSize: 16, color: '#9CA3AF' },
+  dropdown:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 13, backgroundColor: '#fff' },
+  dropdownText: { fontSize: 15, color: '#1C1C1E' },
+  dropdownList: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, backgroundColor: '#fff', overflow: 'hidden', marginTop: -8 },
+  dropdownItem: { paddingHorizontal: 14, paddingVertical: 12 },
+  dropdownItemActive: { backgroundColor: '#EEF0FB' },
+  dropdownItemText: { fontSize: 15, color: '#1C1C1E' },
+  dropdownItemTextActive: { color: '#5C6BC0', fontWeight: '600' },
 
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 16, marginBottom: 10 },
+  tabRow:       { flexDirection: 'row', backgroundColor: '#F4F6FB', borderRadius: 10, padding: 3 },
+  tab:          { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 8 },
+  tabActive:    { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 4, elevation: 2 },
+  tabText:      { fontSize: 14, color: '#9CA3AF', fontWeight: '500' },
+  tabTextActive:{ fontSize: 14, color: '#1C1C1E', fontWeight: '700' },
+
+  dateRow:   { flexDirection: 'row', gap: 12 },
+  dateCol:   { flex: 1, gap: 6 },
+  dateLabel: { fontSize: 10, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.8 },
+  dateInput: { flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, backgroundColor: '#fff' },
+  dateText:  { fontSize: 13, color: '#1C1C1E' },
+
+  sectionRow:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 16, marginBottom: 10 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: '#1C1C1E' },
-  sampleBadge: { backgroundColor: '#FEF3C7', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
-  sampleBadgeText: { fontSize: 10, fontWeight: '700', color: '#D97706', letterSpacing: 0.5 },
+  exportBtns:   { flexDirection: 'row', gap: 8 },
+  exportBtn:    { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#5C6BC0', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  exportBtnText:{ color: '#fff', fontSize: 12, fontWeight: '700' },
 
-  exportRow: { flexDirection: 'row', gap: 10, marginHorizontal: 16, marginBottom: 16 },
-  exportBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: '#5C6BC0', borderRadius: 12, paddingVertical: 13,
-    shadowColor: '#5C6BC0', shadowOpacity: 0.3, shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 }, elevation: 4,
-  },
-  exportBtnSecondary: { backgroundColor: '#7C3AED' },
-  exportText: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
-  // Table
-  tableHeader: {
-    flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8,
-    backgroundColor: '#F4F6FB',
-  },
-  divider: { height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 16 },
-  colHead: { fontSize: 11, fontWeight: '700', color: '#6B7280', letterSpacing: 0.4 },
-  tableRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 14 },
+  tableHeader: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: '#F4F6FB' },
+  divider:     { height: 1, backgroundColor: '#E5E7EB', marginHorizontal: 16 },
+  colHead:     { fontSize: 11, fontWeight: '700', color: '#6B7280', letterSpacing: 0.4 },
+  tableRow:    { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 14 },
   tableRowAlt: { backgroundColor: '#F8F9FF' },
-  cell: { fontSize: 13, color: '#1C1C1E', lineHeight: 18 },
+  cell:        { fontSize: 13, color: '#1C1C1E', lineHeight: 18 },
 
-  // Column widths
   colDevice: { flex: 2 },
-  colTime: { flex: 2.2 },
-  colCat: { flex: 2 },
-  colDur: { flex: 1.5, textAlign: 'right' },
+  colTime:   { flex: 2.2 },
+  colCat:    { flex: 2 },
+  colDur:    { flex: 1.5, textAlign: 'right' },
 
-  emptyWrap: { alignItems: 'center', paddingTop: 60, gap: 12 },
-  emptyText: { fontSize: 14, color: '#9CA3AF' },
+  emptyWrap:     { alignItems: 'center', paddingTop: 60, paddingHorizontal: 32, gap: 12 },
+  emptyTitle:    { fontSize: 16, fontWeight: '700', color: '#374151' },
+  emptySubtitle: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', lineHeight: 20 },
 });
 
 const dp = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
-  container: { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: 320 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  arrow: { fontSize: 24, color: '#5C6BC0', paddingHorizontal: 8 },
-  arrowDisabled: { opacity: 0.25 },
-  monthYear: { fontSize: 16, fontWeight: '700', color: '#1C1C1E' },
-  weekRow: { flexDirection: 'row', marginBottom: 8 },
-  weekDay: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: '#9CA3AF' },
-  grid: { flexDirection: 'row', flexWrap: 'wrap' },
-  cell: { width: `${100 / 7}%` as any, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
-  cellSelected: { backgroundColor: '#5C6BC0' },
-  cellDisabled: { opacity: 0.25 },
-  cellText: { fontSize: 13, color: '#1C1C1E' },
+  overlay:          { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  container:        { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: 320 },
+  header:           { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  arrow:            { fontSize: 24, color: '#5C6BC0', paddingHorizontal: 8 },
+  arrowDisabled:    { opacity: 0.25 },
+  monthYear:        { fontSize: 16, fontWeight: '700', color: '#1C1C1E' },
+  weekRow:          { flexDirection: 'row', marginBottom: 8 },
+  weekDay:          { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: '#9CA3AF' },
+  grid:             { flexDirection: 'row', flexWrap: 'wrap' },
+  cell:             { width: `${100 / 7}%` as any, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
+  cellSelected:     { backgroundColor: '#5C6BC0' },
+  cellDisabled:     { opacity: 0.25 },
+  cellText:         { fontSize: 13, color: '#1C1C1E' },
   cellTextSelected: { color: '#fff', fontWeight: '700' },
   cellTextDisabled: { color: '#9CA3AF' },
-  actions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
-  cancelBtn: { paddingHorizontal: 16, paddingVertical: 8 },
-  cancelText: { fontSize: 14, color: '#9CA3AF' },
+  actions:          { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
+  cancelBtn:        { paddingHorizontal: 16, paddingVertical: 8 },
+  cancelText:       { fontSize: 14, color: '#9CA3AF' },
 });

@@ -10,7 +10,27 @@ export async function getReadingsByDevice(device_id: string, limit = 100): Promi
   );
 }
 
-export async function insertReading(reading: Omit<Reading, 'reading_id'>): Promise<void> {
+export async function getReadingsLast7Days(device_id: string): Promise<Reading[]> {
+  const db = await getReadyDb();
+  if (!db) return [];
+  const cutoff = Date.now() - 7 * 86400000;
+  return db.getAllAsync<Reading>(
+    'SELECT * FROM readings WHERE device_id = ? AND timestamp >= ? ORDER BY timestamp ASC',
+    device_id, cutoff
+  );
+}
+
+export async function getReadingsByDateRange(
+  device_id: string, startTs: number, endTs: number
+): Promise<Reading[]> {
+  const db = await getReadyDb();
+  if (!db) return [];
+  return db.getAllAsync<Reading>(
+    'SELECT * FROM readings WHERE device_id = ? AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp ASC',
+    device_id, startTs, endTs
+  );
+}
+
   const db = await getReadyDb();
   if (!db) return;
   await db.runAsync(

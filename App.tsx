@@ -8,6 +8,7 @@ import { checkAllStatus, requestPermissions } from './src/utils/permissions';
 import { onScanResult, onConnState, startScan, stopScan } from './src/services/bluetoothService';
 import { setLiveSensorState } from './src/services/liveDeviceService';
 import { startAutoSync, stopAutoSync } from './src/services/autoSyncService';
+import { restoreSecretKey } from './src/services/secretKeyService';
 
 class ErrorBoundary extends Component<{ children: React.ReactNode }, { error: string | null }> {
   state = { error: null };
@@ -31,6 +32,7 @@ export default function App() {
 
   useEffect(() => {
     initDb()
+      .then(() => restoreSecretKey())
       .then(() => requestNotificationPermissions().catch(() => {}))
       .then(() => {
         setReady(true);
