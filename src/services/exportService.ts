@@ -147,6 +147,7 @@ function buildFullReportHtml(
   endDate: number,
   categoryLabel: string,
   reportTitle: string,
+  aggregateLabel: string = 'Daily',
 ): string {
   const now = new Date();
   const generatedAt = fmtDT(now.getTime());
@@ -259,6 +260,7 @@ function buildFullReportHtml(
   <div class="report-title">${reportTitle}</div>
   <div class="meta">Hour and date: ${generatedAt}</div>
   <div class="meta">Period: ${periodStr}</div>
+  <div class="meta">Aggregate: ${aggregateLabel}</div>
 
   <div class="legend-box">
     <div class="legend-title">Legend</div>
@@ -319,12 +321,13 @@ export async function exportFullReportPdf(
   startDate: number,
   endDate: number,
   categoryLabel: string,
+  aggregateLabel: string = 'Daily',
 ): Promise<string> {
   const now = new Date();
   const monthName = now.toLocaleString('en', { month: 'long' });
   const title = `Kumva Insights ${monthName} Report`;
 
-  const html = buildFullReportHtml(deviceReports, startDate, endDate, categoryLabel, title);
+  const html = buildFullReportHtml(deviceReports, startDate, endDate, categoryLabel, title, aggregateLabel);
   const { uri: tmpUri } = await Print.printToFileAsync({ html, base64: false });
   const filename = `kumva_report_${ts()}.pdf`;
   const cacheUri = `${LegacyFS.cacheDirectory}${filename}`;
@@ -387,6 +390,7 @@ export async function exportFullReportExcel(
   startDate: number,
   endDate: number,
   categoryLabel: string,
+  aggregateLabel: string = 'Daily',
 ): Promise<string> {
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Kumva Insights';
@@ -398,11 +402,12 @@ export async function exportFullReportExcel(
   cover.getCell('A1').font  = { bold: true, size: 14, color: { argb: 'FF5C6BC0' } };
   cover.getCell('A2').value = `Category: ${categoryLabel}`;
   cover.getCell('A3').value = `Period: ${fmtDate(startDate)} to ${fmtDate(endDate)}`;
-  cover.getCell('A4').value = `Generated: ${fmtDT(Date.now())}`;
-  cover.getCell('A4').font  = { italic: true, color: { argb: 'FF6B7280' } };
+  cover.getCell('A4').value = `Aggregate: ${aggregateLabel}`;
+  cover.getCell('A5').value = `Generated: ${fmtDT(Date.now())}`;
+  cover.getCell('A5').font  = { italic: true, color: { argb: 'FF6B7280' } };
   cover.addRow([]);
   cover.addRow(['Device Code', 'Device Name', 'Category', 'MAC Address']);
-  cover.getRow(6).font = { bold: true };
+  cover.getRow(7).font = { bold: true };
   deviceReports.forEach(dr => {
     const code = dr.device.name.replace(/\s+/g,'').substring(0,8).toUpperCase();
     cover.addRow([code, dr.device.name, dr.device.category.replace('_',' '), dr.device.mac_address]);

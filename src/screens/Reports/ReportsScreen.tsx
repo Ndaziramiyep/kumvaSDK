@@ -7,11 +7,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppStore } from '../../store/store';
 import { DeviceCategory } from '../../types/device';
+import { Reading } from '../../types/reading';
 import { insertReport } from '../../database/repositories/reportRepository';
 import { getReadingsByDateRange } from '../../database/repositories/readingRepository';
 import { exportFullReportPdf, exportFullReportExcel, DeviceReport } from '../../services/exportService';
 
-type TimeRange = 'Week' | 'Month' | 'Custom';
+type TimeRange  = 'Week' | 'Month' | 'Custom';
+type Aggregate  = 'Daily' | 'Hourly' | 'Minute';
+
+const AGGREGATE_OPTIONS: { label: string; value: Aggregate; intervalMs: number }[] = [
+  { label: 'Daily',   value: 'Daily',   intervalMs: 86400000 },
+  { label: 'Hourly',  value: 'Hourly',  intervalMs: 3600000  },
+  { label: 'Minute',  value: 'Minute',  intervalMs: 60000    },
+];
 
 const CATEGORY_OPTIONS: { label: string; value: DeviceCategory | 'all' }[] = [
   { label: 'All Categories', value: 'all' },
@@ -127,6 +135,33 @@ export default function ReportsScreen() {
   const [reportRows, setReportRows]           = useState<any[]>([]);
   const [deviceReports, setDeviceReports]     = useState<DeviceReport[]>([]);
   const [generated, setGenerated]             = useState(false);
+  const [aggregate, setAggregate]             = useState<Aggregate>('Daily');
+  const [showAggregatePicker, setShowAggregatePicker] = useState(false);
+
+  const selectedAggregateLabel = AGGREGATE_OPTIONS.find(o => o.value === aggregate)?.label ?? 'Daily';
+  const aggregateIntervalMs    = AGGREGATE_OPTIONS.find(o => o.value === aggregate)?.intervalMs ?? 86400000;
+
+  // ── Aggregate readings into buckets ────────────────────────────────────────
+  const aggregateReadings = (readings: Reading[], intervalMs: number): Reading[] => {
+    if (readings.length === 0) return [];
+    const buckets = new Map<number, Reading[]>();
+    readings.forEach(r => {
+      const bucket = Math.floor(r.timestamp / intervalMs) * intervalMs;
+      if (!buckets.has(bucket)) buckets.set(bucket, []);
+      buckets.get(bucket)!.push(r);
+    });
+    return Array.from(buckets.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([bucketTs, recs]) => ({
+        device_id:   recs[0].device_id,
+        timestamp:   bucketTs,
+        temperature: recs.reduce((s, r) => s + r.temperature, 0) / recs.length,
+        humidity:    recs.some(r => r.humidity != null)
+          ? recs.filter(r => r.humidity != null).reduce((s, r) => s + r.humidity!, 0) /
+            recs.filter(r => r.humidity != null).length
+          : null,
+      }));
+  };
 
   const selectedCategoryLabel = CATEGORY_OPTIONS.find(o => o.value === category)?.label ?? 'All Categories';
 
@@ -141,7 +176,8 @@ export default function ReportsScreen() {
       const rows: any[] = [];
       const devReports: DeviceReport[] = [];
       for (const device of filteredDevices) {
-        const readings = await getReadingsByDateRange(device.device_id, startDate, endDate);
+        const rawReadings = await getReadingsByDateRange(device.device_id, startDate, endDate);
+        const readings    = aggregateReadings(rawReadings, aggregateIntervalMs);
         devReports.push({ device, readings });
         readings.forEach(r => rows.push({
           device:      device.name,
@@ -169,14 +205,14 @@ export default function ReportsScreen() {
     } finally {
       setLoading(false);
     }
-  }, [filteredDevices, startDate, endDate, category]);
+  }, [filteredDevices, startDate, endDate, category, aggregateIntervalMs]);
 
   // Auto-generate when filters change
   useEffect(() => {
     setGenerated(false);
     setReportRows([]);
     setDeviceReports([]);
-  }, [category, startDate, endDate]);
+  }, [category, startDate, endDate, aggregate]);
 
   const applyTimeRange = (range: TimeRange) => {
     setTimeRange(range);
@@ -195,8 +231,8 @@ export default function ReportsScreen() {
     setExporting(true);
     try {
       const uri = format === 'PDF'
-        ? await exportFullReportPdf(deviceReports, startDate, endDate, selectedCategoryLabel)
-        : await exportFullReportExcel(deviceReports, startDate, endDate, selectedCategoryLabel);
+        ? await exportFullReportPdf(deviceReports, startDate, endDate, selectedCategoryLabel, selectedAggregateLabel)
+        : await exportFullReportExcel(deviceReports, startDate, endDate, selectedCategoryLabel, selectedAggregateLabel);
       Alert.alert('Export Successful', `Your ${format} report has been saved.\n\n${uri}`, [{ text: 'OK' }]);
     } catch (e: any) {
       Alert.alert('Export Failed', e?.message || 'Could not export report. Please try again.');
@@ -267,6 +303,35 @@ export default function ReportsScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Aggregates */}
+        <Text style={styles.label}>Aggregates</Text>
+        <TouchableOpacity style={styles.select} onPress={() => setShowAggregatePicker(v => !v)} activeOpacity={0.8}>
+          <Text style={styles.selectText}>{selectedAggregateLabel}</Text>
+          <Ionicons name={showAggregatePicker ? 'chevron-up' : 'chevron-down'} size={18} color="#6B7280" />
+        </TouchableOpacity>
+        {showAggregatePicker && (
+          <View style={styles.dropdown}>
+            {AGGREGATE_OPTIONS.map(o => (
+              <TouchableOpacity
+                key={o.value}
+                style={[styles.dropdownItem, o.value === aggregate && styles.dropdownItemActive]}
+                onPress={() => { setAggregate(o.value); setShowAggregatePicker(false); }}
+              >
+                <View style={styles.aggregateRow}>
+                  <Text style={[styles.dropdownText, o.value === aggregate && styles.dropdownTextActive]}>
+                    {o.label}
+                  </Text>
+                  <Text style={styles.aggregateHint}>
+                    {o.value === 'Daily'  ? 'One record per day'    :
+                     o.value === 'Hourly' ? 'One record per hour'   :
+                                           'One record per minute'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
         {/* Preview area — tap to generate */}
         <TouchableOpacity
@@ -385,6 +450,8 @@ const styles = StyleSheet.create({
   dropdownItemActive: { backgroundColor: '#EEF0FB' },
   dropdownText: { fontSize: 15, color: '#1C1C1E' },
   dropdownTextActive: { color: '#5C6BC0', fontWeight: '600' },
+  aggregateRow:  { flex: 1 },
+  aggregateHint: { fontSize: 11, color: '#9CA3AF', marginTop: 2 },
 
   tabRow: { flexDirection: 'row', backgroundColor: '#F0F2FA', borderRadius: 10, padding: 4 },
   tab: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 8 },
