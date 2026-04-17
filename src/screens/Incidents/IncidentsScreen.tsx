@@ -1,14 +1,14 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, Alert,
+  View, Text, TouchableOpacity, FlatList,
+  StyleSheet, Alert, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { getAllIncidents } from '../../database/repositories/incidentRepository';
 import { useAppStore } from '../../store/store';
 import { Incident } from '../../types/incident';
-import { Device } from '../../types/device';
+import { Device, DeviceCategory } from '../../types/device';
 import { exportPdf, exportExcel } from '../../services/exportService';
 
 function formatTimestamp(ts: number): string {
@@ -33,6 +33,74 @@ function categoryLabel(cat: string): string {
   return map[cat] ?? cat;
 }
 
+const THREE_MONTHS_AGO = (() => { const d = new Date(); d.setMonth(d.getMonth() - 3); d.setHours(0,0,0,0); return d.getTime(); })();
+const TODAY_END = (() => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); })();
+
+const CATEGORY_OPTIONS: { label: string; value: DeviceCategory | 'all' }[] = [
+  { label: 'All', value: 'all' },
+  { label: 'Freezer', value: 'freezer' },
+  { label: 'Fridge', value: 'fridge' },
+  { label: 'Cold Room', value: 'cold_room' },
+  { label: 'General', value: 'general' },
+];
+
+function formatDate(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+}
+
+function DatePickerModal({ visible, value, minDate, maxDate, onConfirm, onCancel }: {
+  visible: boolean; value: number; minDate: number; maxDate: number;
+  onConfirm: (ts: number) => void; onCancel: () => void;
+}) {
+  const [current, setCurrent] = useState(new Date(value));
+  const year = current.getFullYear();
+  const month = current.getMonth();
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array(firstDay).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const isDayDisabled = (day: number) => { const ts = new Date(year, month, day).getTime(); return ts < minDate || ts > maxDate; };
+  const canGoPrev = new Date(year, month - 1 + 1, 0).getTime() >= minDate;
+  const canGoNext = new Date(year, month + 1, 1).getTime() <= maxDate;
+  const selectedDay = new Date(value).getDate();
+  const isCurrentMonth = new Date(value).getFullYear() === year && new Date(value).getMonth() === month;
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={dp.overlay}>
+        <View style={dp.container}>
+          <View style={dp.header}>
+            <TouchableOpacity onPress={() => canGoPrev && setCurrent(new Date(year, month - 1, 1))} disabled={!canGoPrev}>
+              <Text style={[dp.arrow, !canGoPrev && dp.arrowDisabled]}>‹</Text>
+            </TouchableOpacity>
+            <Text style={dp.monthYear}>{MONTHS[month]} {year}</Text>
+            <TouchableOpacity onPress={() => canGoNext && setCurrent(new Date(year, month + 1, 1))} disabled={!canGoNext}>
+              <Text style={[dp.arrow, !canGoNext && dp.arrowDisabled]}>›</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={dp.weekRow}>
+            {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => <Text key={d} style={dp.weekDay}>{d}</Text>)}
+          </View>
+          <View style={dp.grid}>
+            {cells.map((day, i) => {
+              const disabled = !day || isDayDisabled(day);
+              const selected = !!day && isCurrentMonth && day === selectedDay;
+              return (
+                <TouchableOpacity key={i} style={[dp.cell, selected && dp.cellSelected, disabled && dp.cellDisabled]}
+                  onPress={() => day && !disabled && onConfirm(new Date(year, month, day).getTime())} disabled={disabled}>
+                  <Text style={[dp.cellText, selected && dp.cellTextSelected, disabled && dp.cellTextDisabled]}>{day ?? ''}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={dp.actions}>
+            <TouchableOpacity onPress={onCancel} style={dp.cancelBtn}><Text style={dp.cancelText}>Cancel</Text></TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 type Row = Incident & { deviceName: string; deviceCategory: string };
 
 const SAMPLE_INCIDENTS: Row[] = [
@@ -49,7 +117,11 @@ const SAMPLE_INCIDENTS: Row[] = [
 export default function IncidentsScreen({ navigation }: any) {
   const devices = useAppStore((s: any) => s.devices);
   const [incidents, setIncidents] = useState<Row[]>([]);
-  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<DeviceCategory | 'all'>('all');
+  const [startDate, setStartDate] = useState(THREE_MONTHS_AGO);
+  const [endDate, setEndDate] = useState(TODAY_END);
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
 
   useEffect(() => {
     getAllIncidents()
@@ -69,13 +141,12 @@ export default function IncidentsScreen({ navigation }: any) {
   }, [devices]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return incidents;
-    const q = search.toLowerCase();
-    return incidents.filter(r =>
-      r.deviceName.toLowerCase().includes(q) ||
-      r.deviceCategory.toLowerCase().includes(q)
-    );
-  }, [incidents, search]);
+    return incidents.filter(r => {
+      const matchCat = category === 'all' || r.deviceCategory === category;
+      const matchDate = r.start_time >= startDate && r.start_time <= endDate;
+      return matchCat && matchDate;
+    });
+  }, [incidents, category, startDate, endDate]);
 
   const displayData = filtered.length > 0 ? filtered : SAMPLE_INCIDENTS;
   const isSample = filtered.length === 0;
@@ -98,16 +169,27 @@ export default function IncidentsScreen({ navigation }: any) {
 
   const renderHeader = () => (
     <View>
-      {/* Search */}
-      <View style={styles.searchWrap}>
-        <Ionicons name="search-outline" size={16} color="#B0B8C8" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search incidents..."
-          placeholderTextColor="#B0B8C8"
-          value={search}
-          onChangeText={setSearch}
-        />
+      {/* Category chips */}
+      <View style={styles.chipsRow}>
+        {CATEGORY_OPTIONS.map(o => (
+          <TouchableOpacity key={o.value} style={[styles.chip, category === o.value && styles.chipActive]}
+            onPress={() => setCategory(o.value)}>
+            <Text style={[styles.chipText, category === o.value && styles.chipTextActive]}>{o.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Date range */}
+      <View style={styles.dateRow}>
+        <TouchableOpacity style={styles.dateInput} onPress={() => setShowStartPicker(true)}>
+          <Ionicons name="calendar-outline" size={14} color="#9CA3AF" />
+          <Text style={styles.dateText}>{formatDate(startDate)}</Text>
+        </TouchableOpacity>
+        <Text style={styles.dateSep}>→</Text>
+        <TouchableOpacity style={styles.dateInput} onPress={() => setShowEndPicker(true)}>
+          <Ionicons name="calendar-outline" size={14} color="#9CA3AF" />
+          <Text style={styles.dateText}>{formatDate(endDate)}</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Recent Activity + Export */}
@@ -170,6 +252,11 @@ export default function IncidentsScreen({ navigation }: any) {
           </View>
         )}
       />
+
+      <DatePickerModal visible={showStartPicker} value={startDate} minDate={THREE_MONTHS_AGO} maxDate={endDate}
+        onConfirm={ts => { setStartDate(ts); setShowStartPicker(false); }} onCancel={() => setShowStartPicker(false)} />
+      <DatePickerModal visible={showEndPicker} value={endDate} minDate={startDate} maxDate={TODAY_END}
+        onConfirm={ts => { setEndDate(ts); setShowEndPicker(false); }} onCancel={() => setShowEndPicker(false)} />
     </SafeAreaView>
   );
 }
@@ -187,12 +274,15 @@ const styles = StyleSheet.create({
 
   list: { paddingBottom: 32 },
 
-  searchWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB',
-    paddingHorizontal: 14, paddingVertical: 11, margin: 16, marginBottom: 8,
-  },
-  searchInput: { flex: 1, fontSize: 14, color: '#1C1C1E' },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginHorizontal: 16, marginTop: 14, marginBottom: 10 },
+  chip: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: '#F0F2FA', borderWidth: 1, borderColor: '#E5E7EB' },
+  chipActive: { backgroundColor: '#5C6BC0', borderColor: '#5C6BC0' },
+  chipText: { fontSize: 13, color: '#6B7280', fontWeight: '500' },
+  chipTextActive: { color: '#fff', fontWeight: '700' },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 16, marginBottom: 14 },
+  dateInput: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 12, paddingVertical: 10 },
+  dateText: { fontSize: 13, color: '#1C1C1E' },
+  dateSep: { fontSize: 16, color: '#9CA3AF' },
 
   sectionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginHorizontal: 16, marginBottom: 10 },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: '#1C1C1E' },
@@ -228,4 +318,25 @@ const styles = StyleSheet.create({
 
   emptyWrap: { alignItems: 'center', paddingTop: 60, gap: 12 },
   emptyText: { fontSize: 14, color: '#9CA3AF' },
+});
+
+const dp = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  container: { backgroundColor: '#fff', borderRadius: 16, padding: 20, width: 320 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  arrow: { fontSize: 24, color: '#5C6BC0', paddingHorizontal: 8 },
+  arrowDisabled: { opacity: 0.25 },
+  monthYear: { fontSize: 16, fontWeight: '700', color: '#1C1C1E' },
+  weekRow: { flexDirection: 'row', marginBottom: 8 },
+  weekDay: { flex: 1, textAlign: 'center', fontSize: 11, fontWeight: '600', color: '#9CA3AF' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+  cell: { width: `${100 / 7}%` as any, aspectRatio: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 20 },
+  cellSelected: { backgroundColor: '#5C6BC0' },
+  cellDisabled: { opacity: 0.25 },
+  cellText: { fontSize: 13, color: '#1C1C1E' },
+  cellTextSelected: { color: '#fff', fontWeight: '700' },
+  cellTextDisabled: { color: '#9CA3AF' },
+  actions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 },
+  cancelBtn: { paddingHorizontal: 16, paddingVertical: 8 },
+  cancelText: { fontSize: 14, color: '#9CA3AF' },
 });

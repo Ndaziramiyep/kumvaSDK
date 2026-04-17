@@ -9,7 +9,7 @@ import { useAppStore } from '../../store/store';
 import { getReadingsByDevice, insertReadings } from '../../database/repositories/readingRepository';
 import { getIncidentsByDevice } from '../../database/repositories/incidentRepository';
 import { updateDeviceSync } from '../../database/repositories/deviceRepository';
-import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect, setThAlarmValue, setOpenHistoryDataStore } from '../../services/bluetoothService';
+import { connect, readThHistoryData, onThHistoryData, onConnState, disConnect, setThAlarmValue, setOpenHistoryDataStore, resetDevice } from '../../services/bluetoothService';
 import { exportPdf } from '../../services/exportService';
 import { useLiveDeviceState } from '../../hooks/useLiveDevice';
 import { Reading } from '../../types/reading';
@@ -167,6 +167,8 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
   const [readings, setReadings] = useState<Reading[]>([]);
   const [incidentCount, setIncidentCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [poweringOff, setPoweringOff] = useState(false);
   const updateDeviceStore = useAppStore(s => s.updateDevice);
 
   useEffect(() => {
@@ -349,6 +351,68 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
     }
   };
 
+  const handlePowerOff = () => {
+    Alert.alert(
+      'Power Off Device',
+      `Disconnect and power off ${device.name}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Power Off', style: 'destructive',
+          onPress: async () => {
+            setPoweringOff(true);
+            try {
+              disConnect(device.mac_address);
+              Alert.alert('Powered Off', `${device.name} has been disconnected.`);
+            } catch (e: any) {
+              Alert.alert('Error', e?.message || 'Could not power off device.');
+            } finally {
+              setPoweringOff(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleReset = () => {
+    Alert.alert(
+      'Reset Device',
+      `This will factory-reset ${device.name} and clear all its stored data. Continue?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset', style: 'destructive',
+          onPress: async () => {
+            setResetting(true);
+            let connSub: any;
+            let connTimer: any;
+            try {
+              await new Promise<void>((resolve, reject) => {
+                connTimer = setTimeout(() => reject(new Error('Connection timed out')), 20000);
+                connSub = onConnState((event: any) => {
+                  if ((event?.mac ?? '').toUpperCase() !== device.mac_address.toUpperCase()) return;
+                  if (event.state === 'connected_complete') { clearTimeout(connTimer); resolve(); }
+                  else if (event.state === 'password_error') { clearTimeout(connTimer); reject(new Error('Password error')); }
+                });
+                connect(device.mac_address);
+              });
+              await resetDevice(device.mac_address);
+              Alert.alert('Reset Complete', `${device.name} has been reset to factory settings.`);
+            } catch (e: any) {
+              Alert.alert('Reset Failed', e?.message || 'Could not reset device.');
+            } finally {
+              clearTimeout(connTimer);
+              connSub?.remove?.();
+              disConnect(device.mac_address);
+              setResetting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const categoryLabel = device.category === 'cold_room' ? 'COLD ROOM'
     : device.category === 'general' ? 'GENERAL AREA'
     : device.category.toUpperCase();
@@ -488,33 +552,49 @@ export default function DeviceDetailScreen({ navigation, route }: any) {
           </TouchableOpacity>
         </View>
 
-        {/* Action buttons */}
-        <TouchableOpacity
-          style={[styles.actionBtn, syncing && { opacity: 0.7 }]}
-          onPress={handleSync}
-          disabled={syncing}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="sync-outline" size={18} color="#fff" />
-          <Text style={styles.actionBtnText}>{syncing ? 'Syncing...' : 'Sync Data'}</Text>
-        </TouchableOpacity>
+        {/* Device Controls */}
+        <Text style={styles.sectionLabel}>Device Controls</Text>
+        <View style={styles.controlsGrid}>
+          {/* Sync */}
+          <TouchableOpacity
+            style={[styles.controlBtn, styles.controlBtnPrimary, syncing && { opacity: 0.7 }]}
+            onPress={handleSync} disabled={syncing} activeOpacity={0.85}
+          >
+            <Ionicons name="sync-outline" size={20} color="#fff" />
+            <Text style={styles.controlBtnText}>{syncing ? 'Syncing...' : 'Sync Data'}</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.actionBtnOutline}
-          onPress={() => navigation.navigate('DeviceConfig', {
-            isReconfigure: true,
-            deviceId: device.device_id,
-            scannedDevice: {
-              name: device.name,
-              macAddress: device.mac_address,
-              category: device.category,
-            },
-          })}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="settings-outline" size={18} color="#5C6BC0" />
-          <Text style={styles.actionBtnOutlineText}>Reconfigure Device</Text>
-        </TouchableOpacity>
+          {/* Reconfigure */}
+          <TouchableOpacity
+            style={[styles.controlBtn, styles.controlBtnOutline]}
+            onPress={() => navigation.navigate('DeviceConfig', {
+              isReconfigure: true, deviceId: device.device_id,
+              scannedDevice: { name: device.name, macAddress: device.mac_address, category: device.category },
+            })}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="settings-outline" size={20} color="#5C6BC0" />
+            <Text style={styles.controlBtnOutlineText}>Reconfigure</Text>
+          </TouchableOpacity>
+
+          {/* Power Off */}
+          <TouchableOpacity
+            style={[styles.controlBtn, styles.controlBtnWarning, poweringOff && { opacity: 0.7 }]}
+            onPress={handlePowerOff} disabled={poweringOff} activeOpacity={0.85}
+          >
+            <Ionicons name="power-outline" size={20} color="#fff" />
+            <Text style={styles.controlBtnText}>{poweringOff ? 'Powering Off...' : 'Power Off'}</Text>
+          </TouchableOpacity>
+
+          {/* Reset */}
+          <TouchableOpacity
+            style={[styles.controlBtn, styles.controlBtnDanger, resetting && { opacity: 0.7 }]}
+            onPress={handleReset} disabled={resetting} activeOpacity={0.85}
+          >
+            <Ionicons name="refresh-circle-outline" size={20} color="#fff" />
+            <Text style={styles.controlBtnText}>{resetting ? 'Resetting...' : 'Reset Device'}</Text>
+          </TouchableOpacity>
+        </View>
 
       </ScrollView>
     </SafeAreaView>
@@ -568,21 +648,35 @@ const styles = StyleSheet.create({
   xAxisLine:  { height: 1.5, backgroundColor: '#9CA3AF' },
   xLabel:     { fontSize: 8, color: '#9CA3AF', textAlign: 'center' },
 
-  // Action buttons
-  actionBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: '#5C6BC0', borderRadius: 14, paddingVertical: 16,
-    shadowColor: '#5C6BC0', shadowOpacity: 0.35, shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 }, elevation: 6,
-  },
-  actionBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  // Section label
+  sectionLabel: { fontSize: 13, fontWeight: '700', color: '#6B7280', letterSpacing: 0.5, marginBottom: -4 },
 
-  actionBtnOutline: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: '#fff', borderRadius: 14, paddingVertical: 16,
-    borderWidth: 1.5, borderColor: '#5C6BC0',
+  // Controls grid
+  controlsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  controlBtn: {
+    width: '47.5%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, borderRadius: 14, paddingVertical: 16,
   },
-  actionBtnOutlineText: { color: '#5C6BC0', fontSize: 16, fontWeight: '700' },
+  controlBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  controlBtnPrimary: {
+    backgroundColor: '#5C6BC0',
+    shadowColor: '#5C6BC0', shadowOpacity: 0.35, shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 }, elevation: 5,
+  },
+  controlBtnOutline: {
+    backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#5C6BC0',
+  },
+  controlBtnOutlineText: { color: '#5C6BC0', fontSize: 14, fontWeight: '700' },
+  controlBtnWarning: {
+    backgroundColor: '#F59E0B',
+    shadowColor: '#F59E0B', shadowOpacity: 0.35, shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 }, elevation: 5,
+  },
+  controlBtnDanger: {
+    backgroundColor: '#EF4444',
+    shadowColor: '#EF4444', shadowOpacity: 0.35, shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 }, elevation: 5,
+  },
 
   // Table styles
   tableHeader: { fontWeight: '700', color: '#5C6BC0', fontSize: 12, flex: 1, textAlign: 'center' },

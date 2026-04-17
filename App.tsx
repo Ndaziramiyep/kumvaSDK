@@ -32,8 +32,13 @@ export default function App() {
   useEffect(() => {
     initDb()
       .then(() => requestNotificationPermissions().catch(() => {}))
-      .then(() => setReady(true))
+      .then(() => {
+        setReady(true);
+        startAutoSync();
+      })
       .catch(e => setError(e?.message ?? 'DB init failed'));
+
+    return () => stopAutoSync();
   }, []);
 
   useEffect(() => {
