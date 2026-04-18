@@ -1,18 +1,20 @@
 import { getAllDevices, updateDeviceSync } from '../database/repositories/deviceRepository';
-import { insertReadings } from '../database/repositories/readingRepository';
-import { insertIncident, closeIncident, getOpenIncidentForDevice } from '../database/repositories/incidentRepository';
-import { connect, disConnect, readThHistoryData, onThHistoryData, onConnState } from './bluetoothService';
+import { insertReadings, getLastReadingTimestamp } from '../database/repositories/readingRepository';
+import { processReading } from './thresholdService';
+import { startScan, stopScan, connect, disConnect, readThHistoryData, onScanResult, onThHistoryData, onConnState, setSecretKey } from './bluetoothService';
 import { applySecretKey } from './secretKeyService';
-import { setSecretKey } from './bluetoothService';
-import { sendThresholdAlert, sendSyncNotification } from './notificationService';
 import { useAppStore } from '../store/store';
 import { Reading } from '../types/reading';
+import { Device } from '../types/device';
+import { SYNC_INTERVAL_MS } from '../utils/constants';
 
-const SYNC_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-let syncTimer: ReturnType<typeof setInterval> | null = null;
-let syncing = false;
+let scanSub: any = null;
+const syncQueue: Device[] = [];
+const queuedDeviceIds = new Set<string>();
+let isProcessingQueue = false;
 
-async function syncDevice(device: { device_id: string; mac_address: string; battery_level?: number | null; temp_low_threshold: number; temp_high_threshold: number; secret_key?: string | null }): Promise<void> {
+// ── Sync a single device ──────────────────────────────────────────────────────
+async function syncDevice(device: Device): Promise<void> {
   return new Promise<void>((resolve) => {
     let connSub: any;
     let histSub: any;
@@ -26,15 +28,14 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
       histSub?.remove?.();
     };
 
-    // Step 1: connect with 20s timeout
-    // Apply this device's own secret key before connecting
+    const fail = () => { cleanup(); disConnect(device.mac_address); resolve(); };
+
+    // Step: authenticate — apply device secret key before connecting
     if (device.secret_key) setSecretKey(device.secret_key);
     else applySecretKey();
-    connTimer = setTimeout(() => {
-      cleanup();
-      disConnect(device.mac_address);
-      resolve();
-    }, 20_000);
+
+    // Step: connect with 20s timeout
+    connTimer = setTimeout(fail, 20_000);
 
     connSub = onConnState(async (event: any) => {
       const mac = (event?.mac ?? '').toUpperCase();
@@ -44,23 +45,22 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
         clearTimeout(connTimer);
         connSub?.remove?.();
 
-        // Step 2: read history with 30s timeout — resolve empty on timeout
-        histTimer = setTimeout(() => {
-          cleanup();
-          disConnect(device.mac_address);
-          resolve();
-        }, 30_000);
+        // Step: get last stored timestamp → fetch only new data
+        const fromTimestamp = await getLastReadingTimestamp(device.device_id);
+
+        histTimer = setTimeout(fail, 30_000);
 
         histSub = onThHistoryData(async (event: any) => {
           clearTimeout(histTimer);
           histSub?.remove?.();
 
           try {
-            const payload = Array.isArray(event) ? { history: event } : event;
-            const items: any[] = Array.isArray(payload.history) ? payload.history : [];
+            const items: any[] = Array.isArray(event?.history) ? event.history
+              : Array.isArray(event) ? event : [];
 
             const parseTs = (ts: any): number => {
-              if (typeof ts === 'number' && ts > 1_000_000_000) return ts < 1e12 ? ts * 1000 : ts;
+              if (typeof ts === 'number' && ts > 1_000_000_000)
+                return ts < 1e12 ? ts * 1000 : ts;
               if (typeof ts === 'string') {
                 const p = Date.parse(ts.replace(' ', 'T'));
                 if (!isNaN(p)) return p;
@@ -78,84 +78,34 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
               }));
 
             if (readings.length > 0) {
+              // Store new data
               await insertReadings(readings);
-
-              // ── Incident detection ──────────────────────────────────────
-              // Sort ascending so we process chronologically
-              const sorted = [...readings].sort((a, b) => a.timestamp - b.timestamp);
-              let openIncident = await getOpenIncidentForDevice(device.device_id);
-
-              for (const r of sorted) {
-                const breaching = r.temperature > device.temp_high_threshold ||
-                                  r.temperature < device.temp_low_threshold;
-                if (breaching) {
-                  if (!openIncident) {
-                    // Open a new incident
-                    await insertIncident({
-                      device_id: device.device_id,
-                      device_name: (device as any).name ?? '',
-                      device_category: (device as any).category ?? '',
-                      start_time: r.timestamp,
-                      end_time: null,
-                      max_temperature: r.temperature,
-                      min_temperature: r.temperature,
-                    });
-                    openIncident = await getOpenIncidentForDevice(device.device_id);
-                    // Fire real push notification for the breach
-                    sendThresholdAlert(
-                      (device as any).name ?? device.device_id,
-                      device.device_id,
-                      r.temperature,
-                      device.temp_high_threshold,
-                      device.temp_low_threshold,
-                    ).catch(console.error);
-                  } else {
-                    // Update max/min temperature if needed
-                    const newMax = r.temperature > openIncident.max_temperature ? r.temperature : openIncident.max_temperature;
-                    const newMin = openIncident.min_temperature == null || r.temperature < openIncident.min_temperature ? r.temperature : openIncident.min_temperature;
-                    if (newMax !== openIncident.max_temperature || newMin !== openIncident.min_temperature) {
-                      const db = await import('../database/db').then(m => m.getReadyDb());
-                      await db.runAsync(
-                        'UPDATE incidents SET max_temperature = ?, min_temperature = ? WHERE incident_id = ?',
-                        newMax, newMin, openIncident.incident_id
-                      );
-                      openIncident = { ...openIncident, max_temperature: newMax, min_temperature: newMin };
-                    }
-                  }
-                } else if (openIncident) {
-                  // Temperature back in range — close the incident
-                  await closeIncident(openIncident.incident_id as number, r.timestamp);
-                  openIncident = null;
-                }
+              // Start processing — Incident Engine loops through each record
+              for (const r of readings) {
+                await processReading(device, r as Reading);
               }
             }
 
+            // Step: update last sync time
             const syncTime = Date.now();
             await updateDeviceSync(device.device_id, syncTime, device.battery_level ?? undefined);
 
-            // Update Zustand store
             const store = useAppStore.getState();
             const existing = store.devices.find(d => d.device_id === device.device_id);
-            if (existing) {
-              store.updateDevice({ ...existing, last_sync: syncTime });
-            }
+            if (existing) store.updateDevice({ ...existing, last_sync: syncTime });
             store.setLastSyncedAt(syncTime);
 
-            // Notify sync complete
-            sendSyncNotification(
-              (device as any).name ?? device.device_id,
-              device.device_id,
-              readings.length,
-            ).catch(console.error);
           } catch (e) {
             console.error('[AutoSync] persist error', e);
           }
 
+          // Step: disconnect
           disConnect(device.mac_address);
           resolve();
         });
 
-        readThHistoryData(device.mac_address);
+        // Step: request data from last saved timestamp until now
+        readThHistoryData(device.mac_address, fromTimestamp);
 
       } else if (event.state === 'password_error' || event.state === 'disconnected') {
         cleanup();
@@ -163,44 +113,61 @@ async function syncDevice(device: { device_id: string; mac_address: string; batt
       }
     });
 
+    // Step: connect to device
     connect(device.mac_address);
   });
 }
 
-async function runAutoSync(): Promise<void> {
-  if (syncing) return;
-  syncing = true;
-  try {
-    const devices = await getAllDevices();
-    // Sync devices sequentially to avoid BLE conflicts
-    for (const device of devices) {
-      await syncDevice(device);
-      // Small gap between devices
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  } catch (e) {
-    console.error('[AutoSync] error', e);
-  } finally {
-    syncing = false;
+// ── Queue processor: one device at a time ────────────────────────────────────
+async function processQueue(): Promise<void> {
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
+  while (syncQueue.length > 0) {
+    const device = syncQueue.shift()!;
+    await syncDevice(device);
+    queuedDeviceIds.delete(device.device_id);
   }
+  isProcessingQueue = false;
 }
 
+// ── Scan listener: device detected → enqueue if sync needed ──────────────────
+async function onDeviceDetected(scannedDevices: any[]): Promise<void> {
+  const registeredDevices = await getAllDevices();
+  const registeredMap = new Map(registeredDevices.map(d => [d.mac_address.toUpperCase(), d]));
+
+  for (const scanned of scannedDevices) {
+    const mac = (scanned?.mac ?? scanned?.macAddress ?? '').toUpperCase();
+    const device = registeredMap.get(mac);
+    if (!device) continue;                              // not a registered device
+    if (queuedDeviceIds.has(device.device_id)) continue; // already in queue or syncing
+
+    // Check last sync — skip if less than 10 minutes ago
+    const lastSync = device.last_sync ?? 0;
+    if (Date.now() - lastSync < SYNC_INTERVAL_MS) continue;
+
+    syncQueue.push(device);
+    queuedDeviceIds.add(device.device_id);
+  }
+
+  processQueue();
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
 export function startAutoSync(): void {
-  if (syncTimer) return;
-  // Run once after 30s on startup, then every 10 minutes
-  setTimeout(() => runAutoSync(), 30_000);
-  syncTimer = setInterval(() => runAutoSync(), SYNC_INTERVAL_MS);
+  if (scanSub) return;
+  startScan();
+  scanSub = onScanResult(onDeviceDetected);
 }
 
 export function stopAutoSync(): void {
-  if (syncTimer) {
-    clearInterval(syncTimer);
-    syncTimer = null;
-  }
+  scanSub?.remove?.();
+  scanSub = null;
+  stopScan();
 }
 
-export async function syncSingleDevice(
-  device: { device_id: string; mac_address: string; battery_level?: number | null; temp_low_threshold: number; temp_high_threshold: number; secret_key?: string | null }
-): Promise<void> {
-  await syncDevice(device);
+export async function syncSingleDevice(device: Device): Promise<void> {
+  if (queuedDeviceIds.has(device.device_id)) return;
+  syncQueue.push(device);
+  queuedDeviceIds.add(device.device_id);
+  processQueue();
 }

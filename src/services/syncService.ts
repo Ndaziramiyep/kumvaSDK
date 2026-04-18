@@ -2,7 +2,7 @@ import { SYNC_INTERVAL_MS } from '../utils/constants';
 import { getAllCachedReadings, clearCache } from './cacheService';
 import { insertReadings } from '../database/repositories/readingRepository';
 import { getAllDevices } from '../database/repositories/deviceRepository';
-import { checkThreshold } from './thresholdService';
+import { processReading } from './thresholdService';
 
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -18,7 +18,7 @@ export function startSync(): void {
       for (const reading of readings) {
         const device = deviceMap.get(reading.device_id);
         if (device) {
-          await checkThreshold(device, reading);
+          await processReading(device, reading);
         }
       }
       clearCache();

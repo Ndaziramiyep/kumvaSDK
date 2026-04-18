@@ -40,6 +40,19 @@ export async function closeIncident(incident_id: number, end_time: number): Prom
   );
 }
 
+export async function updateIncidentStats(
+  incident_id: number,
+  max_temperature: number,
+  min_temperature: number
+): Promise<void> {
+  const db = await getReadyDb();
+  if (!db) return;
+  await db.runAsync(
+    'UPDATE incidents SET max_temperature = ?, min_temperature = ? WHERE incident_id = ?',
+    max_temperature, min_temperature, incident_id
+  );
+}
+
 export async function getOpenIncidentForDevice(device_id: string): Promise<Incident | null> {
   const db = await getReadyDb();
   if (!db) return null;

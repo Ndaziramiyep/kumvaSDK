@@ -15,7 +15,8 @@ export const connect    = (mac: string) => MinewBleModule?.connectToDevice(mac, 
 export const disConnect = (mac: string) => MinewBleModule?.disconnectDevice(mac);
 
 // ── Read/Write ────────────────────────────────────────────────────────────────
-export const readThHistoryData = (mac: string) => MinewBleModule?.readHistoryData(mac);
+export const readThHistoryData = (mac: string, fromTimestamp?: number | null) =>
+  MinewBleModule?.readHistoryData(mac, fromTimestamp ?? 0);
 
 export const setTemperatureUnit = (mac: string, isCelsius: boolean): Promise<boolean> =>
   MinewBleModule?.setTemperatureUnit(mac, isCelsius) ?? Promise.resolve(false);

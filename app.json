@@ -39,7 +39,8 @@
       }
     },
     "plugins": [
-      "expo-sharing"
+      "expo-sharing",
+      "expo-asset"
     ]
   }
 }

@@ -40,6 +40,16 @@ export async function insertReading(reading: Omit<Reading, 'reading_id'>): Promi
   );
 }
 
+export async function getLastReadingTimestamp(device_id: string): Promise<number | null> {
+  const db = await getReadyDb();
+  if (!db) return null;
+  const rows = await db.getAllAsync<{ ts: number | null }>(
+    'SELECT MAX(timestamp) as ts FROM readings WHERE device_id = ?',
+    device_id
+  );
+  return rows[0]?.ts ?? null;
+}
+
 export async function insertReadings(readings: Omit<Reading, 'reading_id'>[]): Promise<void> {
   const db = await getReadyDb();
   if (!db) return;

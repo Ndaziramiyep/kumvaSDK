@@ -19,6 +19,7 @@
     "@types/react-native-sqlite-storage": "^6.0.5",
     "exceljs": "^4.4.0",
     "expo": "^55.0.12",
+    "expo-asset": "~55.0.15",
     "expo-camera": "^55.0.15",
     "expo-dev-client": "~55.0.27",
     "expo-file-system": "~55.0.16",
